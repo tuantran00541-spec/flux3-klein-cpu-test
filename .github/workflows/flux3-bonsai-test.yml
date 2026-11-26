@@ -2,6 +2,15 @@ name: FLUX 3 Klein Bonsai (ternary) test
 
 on:
   workflow_dispatch:
+    inputs:
+      convert_source:
+        description: 'Which weights to convert to TQ2: mse = MSE-optimal pre-ternarized (default), amax = converter-native amax TQ2 straight from BF16 (diagnostic: isolates the ternarizer)'
+        required: false
+        default: 'mse'
+        type: choice
+        options:
+          - mse
+          - amax
 
 jobs:
   bonsai-test:
@@ -50,6 +59,7 @@ jobs:
           du -sh models; df -h .
 
       - name: Ternarize (MSE-optimal, group 256)
+        if: ${{ inputs.convert_source != 'amax' }}
         run: |
           set +e
           time timeout 1800 python bonsai/ternarize.py --input models/diffusion_models/flux3-image-klein-bf16.safetensors --output models/flux3-image-klein-ternary.safetensors --scale-rule mse --group 256 --stats-out results/ternarize-stats.json
@@ -61,7 +71,10 @@ jobs:
 
       - name: Convert to TQ2 GGUF
         run: |
-          if [ -f results/ternarize-stats.json ]; then
+          if [ "${{ inputs.convert_source }}" = "amax" ]; then
+            echo "amax-from-bf16 (dispatch input)" > results/convert-source.txt
+            SRC=models/diffusion_models/flux3-image-klein-bf16.safetensors
+          elif [ -f results/ternarize-stats.json ]; then
             echo "MSE-ternary file present, converting it (values pass through the TQ2 amax quantizer exactly)"
             echo "mse-ternary" > results/convert-source.txt
             SRC=models/flux3-image-klein-ternary.safetensors
