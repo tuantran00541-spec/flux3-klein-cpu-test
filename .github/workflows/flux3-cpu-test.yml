@@ -48,6 +48,21 @@ jobs:
           du -sh ComfyUI
           df -h
 
+      - name: Build stable-diffusion.cpp (CPU)
+        # Non-fatal: if the build fails, the client skips the sdcpp config.
+        run: |
+          if git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp; then
+            cd sd.cpp
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSD_WEBP=OFF -DSD_WEBM=OFF || echo CONFIGURE_FAILED
+            cmake --build build --config Release --target sd-cli -j4 || cmake --build build --config Release -j4 || echo BUILD_FAILED
+            ls -la bin/ || true
+            cd ..
+          else
+            echo "sd.cpp clone failed, config 2 will be skipped"
+          fi
+          du -sh sd.cpp 2>/dev/null || true
+          df -h
+
       - name: Download models (GGUF, ~7 GB)
         run: |
           hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --local-dir ComfyUI/models
