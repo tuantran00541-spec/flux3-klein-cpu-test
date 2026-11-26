@@ -45,7 +45,10 @@ jobs:
       - name: Install minimal deps (OpenVINO + tokenizer only, no torch)
         run: |
           python -m pip install --upgrade pip
-          pip install "openvino==2026.2.0" "transformers==5.0.0" huggingface_hub numpy Pillow tqdm
+          pip install "openvino==2026.2.0" "transformers==5.0.0" huggingface_hub numpy Pillow tqdm jinja2
+          # NOTE: jinja2 is required — transformers 5.0.0 needs it for
+          # tokenizer.apply_chat_template (run 45909994003 failed all 3
+          # tests instantly without it, while model load took only 22.3s).
           python -c "import openvino, transformers; print('openvino', openvino.__version__, '| transformers', transformers.__version__)"
           df -h
 
