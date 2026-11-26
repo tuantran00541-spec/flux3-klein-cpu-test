@@ -21,7 +21,10 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu safetensors numpy "huggingface_hub[cli]"
+          # torch comes from the CPU index; the rest must come from PyPI
+          # (the CPU index does not host safetensors/numpy/huggingface_hub)
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet safetensors numpy "huggingface_hub[cli]"
           python -c "import torch; print('torch', torch.__version__)"
 
       - name: Build stable-diffusion.cpp (CPU)
