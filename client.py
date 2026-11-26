@@ -46,7 +46,9 @@ DIT_Q6 = "Sakura-FLUX.3-Image-Klein-Q6_K-4.35GiB.gguf"
 DIT_Q8 = "Sakura-FLUX.3-Image-Klein-Q8_0-5.58GiB.gguf"
 CLIP = "flux3-klein-te-heretic-dhq-Q4_K_M.gguf"
 OFFICIAL_TE_REPO = "Qwen/Qwen3-VL-4B-Instruct-GGUF"
-OFFICIAL_TE_FILE = "Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
+OFFICIAL_TE_FILE = "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+OFFICIAL_TE_VISION = "mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+HERETIC_VISION = "mmproj-flux3-klein-te-heretic-dhq-f16.gguf"
 VAE = "flux2-vae.safetensors"
 MODELS = "ComfyUI/models"
 SDCPP_BIN = "sd.cpp/build/bin/sd-cli"
@@ -321,7 +323,7 @@ def run_comfyui_test(name, prompt, timeout_s, out_dir, meta):
 # ---- stable-diffusion.cpp ----
 
 def run_sdcpp_test(name, dit_file, te_file, timeout_s, out_dir, meta, log_name,
-                   steps=16, width=512, height=512):
+                   steps=16, width=512, height=512, vision_file=None):
     log("=== test %s (timeout %ss) ===" % (name, timeout_s))
     t0 = time.time()
     rec = {"name": name, "status": "failed", "wall_seconds": 0,
@@ -338,6 +340,16 @@ def run_sdcpp_test(name, dit_file, te_file, timeout_s, out_dir, meta, log_name,
            "--width", str(width), "--height", str(height),
            "--threads", str(meta["threads"]),
            "--output", out_png, "-v"]
+    # sd-cli takes the Qwen3-VL vision tower as a separate file
+    # (--llm_vision); without it the text encoder may fail to load.
+    if vision_file:
+        vision_path = os.path.join(MODELS, "text_encoders", vision_file)
+        if os.path.exists(vision_path):
+            cmd += ["--llm_vision", vision_path]
+            rec["vision_file"] = vision_file
+        else:
+            log("WARNING vision file missing, running without --llm_vision: %s"
+                % vision_file)
     # Only pass optional flags the installed sd-cli actually supports
     # (checked against the --help captured by the workflow).
     if "--offload-to-cpu" in SDCLI_HELP:
@@ -373,21 +385,23 @@ def run_sdcpp_with_fallback(name, dit_file, timeout_s, out_dir, meta, log_name,
                             steps=16, width=512, height=512):
     """Try the official Qwen3-VL TE first; fall back to the Heretic TE.
 
-    The Heretic GGUF splits the vision tower into a separate mmproj file,
-    which sd-cli may not accept; the official single-file TE is the safer
-    first attempt. Returns the successful record, or the last failure.
+    Both TEs split the vision tower into a separate mmproj file, passed via
+    sd-cli's --llm_vision flag (confirmed in sd-cli --help). The official
+    single-file TE is the safer first attempt. Returns the successful
+    record, or the last failure.
     """
     candidates = []
     if os.path.exists(os.path.join(MODELS, "text_encoders", OFFICIAL_TE_FILE)):
-        candidates.append((OFFICIAL_TE_FILE, "official-qwen3vl"))
-    candidates.append((CLIP, "heretic-dhq"))
+        candidates.append((OFFICIAL_TE_FILE, OFFICIAL_TE_VISION, "official-qwen3vl"))
+    candidates.append((CLIP, HERETIC_VISION, "heretic-dhq"))
     last = None
-    for i, (te_file, te_label) in enumerate(candidates):
+    for i, (te_file, vision_file, te_label) in enumerate(candidates):
         m = dict(meta)
         m["text_encoder"] = te_label
         ln = log_name if i == 0 else log_name.replace(".log", "-retry.log")
         rec = run_sdcpp_test(name, dit_file, te_file, timeout_s, out_dir,
-                             m, ln, steps=steps, width=width, height=height)
+                             m, ln, steps=steps, width=width, height=height,
+                             vision_file=vision_file)
         last = rec
         if rec["status"] == "success":
             return rec
@@ -451,7 +465,9 @@ def main():
     run_edit = args.run_edit.lower() in ("true", "1", "yes")
     results = {"base_url": BASE_URL, "api_key_used": API_KEY,
                "model": {"dit_q4": DIT_Q4, "dit_q6": DIT_Q6, "dit_q8": DIT_Q8,
-                         "clip": CLIP, "official_te": OFFICIAL_TE_FILE, "vae": VAE},
+                         "clip": CLIP, "heretic_vision": HERETIC_VISION,
+                         "official_te": OFFICIAL_TE_FILE,
+                         "official_te_vision": OFFICIAL_TE_VISION, "vae": VAE},
                "ipex_installed": IPEX_OK,
                "openvino": {
                    "supported": False,

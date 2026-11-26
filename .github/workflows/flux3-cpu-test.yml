@@ -72,11 +72,14 @@ jobs:
       - name: Download models (GGUF, ~7 GB)
         run: |
           hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --local-dir ComfyUI/models
-          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q6_K-4.35GiB.gguf --local-dir ComfyUI/models
           hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF vae/flux2-vae.safetensors --local-dir ComfyUI/models
           hf download pottokao/FLUX.3-Klein-Text-Encoder-Heretic-DHQ-GGUF flux3-klein-te-heretic-dhq-Q4_K_M.gguf --local-dir ComfyUI/models/text_encoders
           hf download pottokao/FLUX.3-Klein-Text-Encoder-Heretic-DHQ-GGUF mmproj-flux3-klein-te-heretic-dhq-f16.gguf --local-dir ComfyUI/models/text_encoders
-          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3-VL-4B-Instruct-Q4_K_M.gguf --local-dir ComfyUI/models/text_encoders
+          # Optional extras: must not kill the run if a filename is wrong -
+          # the client falls back to the Heretic TE / runtime Q6 download.
+          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q6_K-4.35GiB.gguf --local-dir ComfyUI/models || echo "Q6 download failed (non-fatal)"
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3VL-4B-Instruct-Q4_K_M.gguf --local-dir ComfyUI/models/text_encoders || echo "official TE download failed (non-fatal)"
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --local-dir ComfyUI/models/text_encoders || echo "official TE vision download failed (non-fatal)"
           huggingface-cli repo-files Qwen/Qwen3-VL-4B-Instruct-GGUF > qwen-te-files.txt 2>&1 || echo "repo-files listing failed" > qwen-te-files.txt
           ls -la ComfyUI/models/diffusion_models ComfyUI/models/text_encoders ComfyUI/models/vae
           du -sh ComfyUI/models
