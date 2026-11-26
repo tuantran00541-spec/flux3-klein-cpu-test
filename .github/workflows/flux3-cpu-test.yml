@@ -1,0 +1,95 @@
+name: FLUX 3 Klein CPU test
+
+on:
+  workflow_dispatch:
+    inputs:
+      size:
+        description: 'T2I size (512 or 1024)'
+        default: '512'
+        type: choice
+        options: ['512', '1024']
+      run_edit:
+        description: 'Run image-edit test if T2I succeeds'
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+jobs:
+  cpu-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PIP_NO_CACHE_DIR: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          df -h
+          free -h
+          nproc
+
+      - name: Install ComfyUI (CPU)
+        run: |
+          git clone --depth 1 --branch v0.44.0 https://github.com/Comfy-Org/ComfyUI.git ComfyUI || git clone --depth 1 https://github.com/Comfy-Org/ComfyUI.git ComfyUI
+          git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git ComfyUI/custom_nodes/ComfyUI-GGUF
+          git clone --depth 1 https://github.com/pottokao-dotcom/ComfyUI-GGUF-Qwen3VL-TE.git ComfyUI/custom_nodes/ComfyUI-GGUF-Qwen3VL-TE
+          python -m pip install --upgrade pip
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -r ComfyUI/requirements.txt
+          for req in ComfyUI/custom_nodes/*/requirements.txt; do
+            [ -f "$req" ] && pip install -r "$req"
+          done
+          pip install "huggingface_hub[cli]" requests
+          du -sh ComfyUI
+          df -h
+
+      - name: Download models (GGUF, ~7 GB)
+        run: |
+          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --local-dir ComfyUI/models
+          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF vae/flux2-vae.safetensors --local-dir ComfyUI/models
+          hf download pottokao/FLUX.3-Klein-Text-Encoder-Heretic-DHQ-GGUF flux3-klein-te-heretic-dhq-Q4_K_M.gguf --local-dir ComfyUI/models/text_encoders
+          hf download pottokao/FLUX.3-Klein-Text-Encoder-Heretic-DHQ-GGUF mmproj-flux3-klein-te-heretic-dhq-f16.gguf --local-dir ComfyUI/models/text_encoders
+          ls -la ComfyUI/models/diffusion_models ComfyUI/models/text_encoders ComfyUI/models/vae
+          du -sh ComfyUI/models
+          df -h
+
+      - name: Start ComfyUI (CPU)
+        run: |
+          cd ComfyUI
+          nohup python main.py --cpu --listen 127.0.0.1 --port 8188 --disable-auto-launch > ../comfyui.log 2>&1 &
+          cd ..
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8188/system_stats > /dev/null; then
+              echo "ComfyUI up after ${i}x5s"
+              break
+            fi
+            sleep 5
+          done
+          curl -s http://127.0.0.1:8188/system_stats | head -c 1000
+          echo
+          curl -s http://127.0.0.1:8188/object_info/UnetLoaderGGUF | head -c 800
+          echo
+
+      - name: Run tests
+        env:
+          BASE_URL: http://127.0.0.1:8188
+          API_KEY: none
+        run: |
+          python client.py --size "${{ inputs.size }}" --run-edit "${{ inputs.run_edit }}" --out results || true
+          echo '--- comfyui.log tail ---'
+          tail -60 comfyui.log
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux3-klein-cpu-results
+          path: |
+            results/
+            comfyui.log
+          if-no-files-found: warn
