@@ -11,9 +11,18 @@ on:
         options:
           - mse
           - amax
+      mode:
+        description: 'standard = original bonsai test (mse/amax TQ2 + Q4 control); diagnose = round-2 diagnostic ladder (gguf-dump + dequant analysis + ternary-F16 + Q3_K/Q2_K controls)'
+        required: false
+        default: 'standard'
+        type: choice
+        options:
+          - standard
+          - diagnose
 
 jobs:
   bonsai-test:
+    if: ${{ inputs.mode == 'standard' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -120,4 +129,177 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: flux3-klein-bonsai-results
+          path: results/
+
+  # ---- Round-2 diagnostic ladder (mode == 'diagnose') ----
+  # Step 1 (gguf-dump: did the FP16 exceptions really stay FP16?) +
+  # Step 2 (ternary weights via F16, no quantization at all) +
+  # Step 3 (Q3_K / Q2_K controls: is TQ2 specifically broken, or is
+  # sub-4-bit too lossy?). One run, no extra dispatch needed.
+  diagnose:
+    if: ${{ inputs.mode == 'diagnose' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          date +%s > job-start.txt
+          df -h .; nproc; free -h; lscpu | head -25
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet safetensors numpy "huggingface_hub[cli]" gguf
+          python -c "import torch; print('torch', torch.__version__)"
+          command -v gguf-dump && gguf-dump --help 2>&1 | head -5 || echo "gguf-dump CLI missing (diagnose_gguf.py falls back to gguf-py enum)"
+
+      - name: Build stable-diffusion.cpp (CPU)
+        run: |
+          git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp
+          cmake -S sd.cpp -B sd.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF
+          cmake --build sd.cpp/build --config Release --target sd-cli -j4
+          ls -la sd.cpp/build/bin/
+          test -x sd.cpp/build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+          sd.cpp/build/bin/sd-cli --help > sd-cli-help.txt 2>&1 || true
+          du -sh sd.cpp; df -h .
+
+      - name: Download models (BF16 + TE + VAE; no Q4 control needed)
+        run: |
+          mkdir -p models results
+          hf download ml-resources/flux-3-image-klein-comfy diffusion_models/flux3-image-klein-bf16.safetensors --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3VL-4B-Instruct-Q4_K_M.gguf --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --local-dir models
+          hf download ml-resources/flux-3-image-klein-comfy vae/flux2-vae.safetensors --local-dir models
+          find models -type f | sort
+          du -sh models; df -h .
+
+      - name: Ternarize (MSE-optimal, group 256) -- same recipe as round 1
+        run: |
+          set +e
+          time timeout 1800 python bonsai/ternarize.py --input models/diffusion_models/flux3-image-klein-bf16.safetensors --output models/flux3-image-klein-ternary.safetensors --scale-rule mse --group 256 --stats-out results/ternarize-stats.json
+          echo "ternarize exit=$?"
+          ls -la models/
+          if [ ! -f results/ternarize-stats.json ]; then rm -f models/flux3-image-klein-ternary.safetensors; echo "no stats JSON -> ternary file discarded"; fi
+
+      - name: "Convert all variants (non-fatal each: one bad type must not kill the job)"
+        run: |
+          set +e
+          SDCLI=sd.cpp/build/bin/sd-cli
+          BF16=models/diffusion_models/flux3-image-klein-bf16.safetensors
+          TERN=models/flux3-image-klein-ternary.safetensors
+          RULES="modulations=f16,emb_in=f16"
+          time timeout 900 $SDCLI -M convert --diffusion-model "$BF16" --type tq2_0 --tensor-type-rules "$RULES" -o models/flux3-klein-tq2-amax.gguf
+          echo "convert bf16->tq2 exit=$?"
+          if [ -f "$TERN" ]; then
+            time timeout 900 $SDCLI -M convert --diffusion-model "$TERN" --type tq2_0 --tensor-type-rules "$RULES" -o models/flux3-klein-tq2-mse.gguf
+            echo "convert ternary->tq2 exit=$?"
+            time timeout 900 $SDCLI -M convert --diffusion-model "$TERN" --type f16 -o models/flux3-klein-ternary-f16.gguf
+            echo "convert ternary->f16 exit=$?"
+          else
+            echo "no ternary file, skipping ternary converts"
+          fi
+          time timeout 900 $SDCLI -M convert --diffusion-model "$BF16" --type q3_k --tensor-type-rules "$RULES" -o models/flux3-klein-q3k.gguf
+          echo "convert bf16->q3_k exit=$?"
+          time timeout 900 $SDCLI -M convert --diffusion-model "$BF16" --type q2_k --tensor-type-rules "$RULES" -o models/flux3-klein-q2k.gguf
+          echo "convert bf16->q2_k exit=$?"
+          time timeout 900 $SDCLI -M convert --diffusion-model "$BF16" --type f16 -o models/flux3-klein-bf16-f16.gguf
+          echo "convert bf16->f16 exit=$?"
+          ls -la models/
+
+      - name: Dump + dequant analysis (step 1 of the ladder)
+        run: |
+          set +e
+          DUMP="gguf-dump"
+          command -v gguf-dump >/dev/null 2>&1 || DUMP="python -m gguf.scripts.gguf_dump"
+          for f in tq2-amax tq2-mse q3k q2k ternary-f16 bf16-f16; do
+            G=models/flux3-klein-$f.gguf
+            [ -f "$G" ] || { echo "$G missing, skipping dump"; continue; }
+            $DUMP "$G" > results/dump-$f.txt 2>&1 || echo "dump $f failed"
+            echo "--- dump $f: $(grep -c . results/dump-$f.txt 2>/dev/null) lines"
+          done
+          BF16=models/diffusion_models/flux3-image-klein-bf16.safetensors
+          TERN=models/flux3-image-klein-ternary.safetensors
+          [ -f models/flux3-klein-tq2-amax.gguf ] && python bonsai/diagnose_gguf.py --gguf models/flux3-klein-tq2-amax.gguf --dump results/dump-tq2-amax.txt --bf16 "$BF16" --out results/diagnose-tq2-amax.json | tee results/diagnose-tq2-amax.log
+          if [ -f models/flux3-klein-tq2-mse.gguf ]; then
+            python bonsai/diagnose_gguf.py --gguf models/flux3-klein-tq2-mse.gguf --dump results/dump-tq2-mse.txt --bf16 "$BF16" --ternary "$TERN" --out results/diagnose-tq2-mse.json | tee results/diagnose-tq2-mse.log
+          fi
+          for f in q3k q2k ternary-f16 bf16-f16; do
+            [ -f models/flux3-klein-$f.gguf ] && python bonsai/diagnose_gguf.py --gguf models/flux3-klein-$f.gguf --dump results/dump-$f.txt --bf16 "$BF16" --out results/diagnose-$f.json | tee results/diagnose-$f.log || true
+          done
+          ls -la results/
+
+      - name: "Generate ternary-F16 (step 2: the weights, unquantized)"
+        run: |
+          G=models/flux3-klein-ternary-f16.gguf
+          if [ ! -f "$G" ]; then echo "ternary-F16 missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 5400 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          START=$(date +%s)
+          set +e
+          timeout 1500 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/ternary-f16-512.png -v > results/sdcpp-ternary-f16.log 2>&1
+          echo "ternary-f16 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-ternary-f16.time
+          ls -la results/
+
+      - name: Generate Q3_K (step 3a)
+        if: always()
+        run: |
+          G=models/flux3-klein-q3k.gguf
+          if [ ! -f "$G" ]; then echo "Q3_K missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 6000 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          START=$(date +%s)
+          set +e
+          timeout 1500 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/q3k-512.png -v > results/sdcpp-q3k.log 2>&1
+          echo "q3k exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-q3k.time
+          ls -la results/
+
+      - name: Generate Q2_K (step 3b)
+        if: always()
+        run: |
+          G=models/flux3-klein-q2k.gguf
+          if [ ! -f "$G" ]; then echo "Q2_K missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 6300 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          START=$(date +%s)
+          set +e
+          timeout 1500 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/q2k-512.png -v > results/sdcpp-q2k.log 2>&1
+          echo "q2k exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-q2k.time
+          ls -la results/
+
+      - name: Generate BF16-F16 control (proves the F16 path itself works)
+        if: always()
+        run: |
+          G=models/flux3-klein-bf16-f16.gguf
+          if [ ! -f "$G" ]; then echo "BF16-F16 missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 5400 ]; then echo "out of time (${ELAPSED}s), skipping control"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          START=$(date +%s)
+          set +e
+          timeout 1500 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/bf16-f16-512.png -v > results/sdcpp-bf16-f16.log 2>&1
+          echo "bf16-f16 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-bf16-f16.time
+          ls -la results/
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux3-klein-bonsai-diagnose
           path: results/
