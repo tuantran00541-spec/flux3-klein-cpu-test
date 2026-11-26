@@ -1,0 +1,107 @@
+name: FLUX 3 Klein Bonsai (ternary) test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bonsai-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          date +%s > job-start.txt
+          df -h .; nproc; free -h; lscpu | head -25
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu safetensors numpy "huggingface_hub[cli]"
+          python -c "import torch; print('torch', torch.__version__)"
+
+      - name: Build stable-diffusion.cpp (CPU)
+        run: |
+          git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp
+          cmake -S sd.cpp -B sd.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF
+          cmake --build sd.cpp/build --config Release --target sd-cli -j4
+          ls -la sd.cpp/build/bin/
+          test -x sd.cpp/build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+          sd.cpp/build/bin/sd-cli --help > sd-cli-help.txt 2>&1 || true
+          grep -iE "cache-mode|llm_vision|offload|threads" sd-cli-help.txt || true
+          du -sh sd.cpp; df -h .
+
+      - name: Download models
+        run: |
+          mkdir -p models results
+          hf download ml-resources/flux-3-image-klein-comfy diffusion_models/flux3-image-klein-bf16.safetensors --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3VL-4B-Instruct-Q4_K_M.gguf --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --local-dir models
+          hf download ml-resources/flux-3-image-klein-comfy vae/flux2-vae.safetensors --local-dir models
+          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --local-dir models || echo "Q4 download failed (comparison will be skipped)"
+          find models -type f | sort
+          du -sh models; df -h .
+
+      - name: Ternarize (MSE-optimal, group 256)
+        run: |
+          set +e
+          time timeout 1800 python bonsai/ternarize.py --input models/diffusion_models/flux3-image-klein-bf16.safetensors --output models/flux3-image-klein-ternary.safetensors --scale-rule mse --group 256 --stats-out results/ternarize-stats.json
+          echo "ternarize exit=$?"
+          ls -la models/
+          # a failed/slow ternarize must not leave a partial file behind:
+          # the convert step only trusts the ternary file if stats JSON exists
+          if [ ! -f results/ternarize-stats.json ]; then rm -f models/flux3-image-klein-ternary.safetensors; echo "no stats JSON -> ternary file discarded"; fi
+
+      - name: Convert to TQ2 GGUF
+        run: |
+          if [ -f results/ternarize-stats.json ]; then
+            echo "MSE-ternary file present, converting it (values pass through the TQ2 amax quantizer exactly)"
+            echo "mse-ternary" > results/convert-source.txt
+            SRC=models/flux3-image-klein-ternary.safetensors
+          else
+            echo "No ternary file: fallback is converter-native amax TQ2 from the original BF16"
+            echo "amax-from-bf16" > results/convert-source.txt
+            SRC=models/diffusion_models/flux3-image-klein-bf16.safetensors
+          fi
+          time timeout 900 sd.cpp/build/bin/sd-cli -M convert --diffusion-model "$SRC" --type tq2_0 --tensor-type-rules "modulations=f16,emb_in=f16" -o models/flux3-klein-tq2.gguf
+          echo "convert exit=$?"
+          ls -la models/
+
+      - name: Generate with TQ2 (sd.cpp)
+        run: |
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          echo "cache flag: [$CACHE]"
+          START=$(date +%s)
+          set +e
+          timeout 1500 sd.cpp/build/bin/sd-cli --diffusion-model models/flux3-klein-tq2.gguf --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/bonsai-tq2-512.png -v > results/sdcpp-tq2.log 2>&1
+          echo "tq2 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-tq2.time
+          ls -la results/
+
+      - name: Comparison - Q4_K_M via sd.cpp (same prompt)
+        if: always()
+        run: |
+          if [ ! -f models/diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf ]; then echo "Q4 file missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          echo "elapsed ${ELAPSED}s"
+          if [ "$ELAPSED" -gt 6000 ]; then echo "out of time, skipping Q4 comparison"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          START=$(date +%s)
+          set +e
+          timeout 1200 sd.cpp/build/bin/sd-cli --diffusion-model models/diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/q4-512.png -v > results/sdcpp-q4.log 2>&1
+          echo "q4 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-q4.time
+          ls -la results/
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux3-klein-bonsai-results
+          path: results/
