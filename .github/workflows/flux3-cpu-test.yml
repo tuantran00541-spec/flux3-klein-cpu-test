@@ -32,6 +32,9 @@ jobs:
           df -h
           free -h
           nproc
+          lscpu
+          echo "--- CPU flags (avx/f16c/amx/fma) ---"
+          grep -m1 flags /proc/cpuinfo | tr ' ' '\n' | grep -E 'avx|f16c|amx|fma' | sort -u
 
       - name: Install ComfyUI (CPU)
         run: |
@@ -49,16 +52,19 @@ jobs:
           df -h
 
       - name: Build stable-diffusion.cpp (CPU)
-        # Non-fatal: if the build fails, the client skips the sdcpp config.
         run: |
           if git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp; then
             cd sd.cpp
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSD_WEBP=OFF -DSD_WEBM=OFF || echo CONFIGURE_FAILED
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF || echo CONFIGURE_FAILED
             cmake --build build --config Release --target sd-cli -j4 || cmake --build build --config Release -j4 || echo BUILD_FAILED
-            ls -la bin/ || true
+            ls -la build/bin/
+            test -x build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+            ./build/bin/sd-cli --help > ../sd-cli-help.txt 2>&1 || true
+            grep -iE "llm|vision|mmproj|cache-mode|offload|threads" ../sd-cli-help.txt > ../sd-cli-flags.txt || true
             cd ..
           else
-            echo "sd.cpp clone failed, config 2 will be skipped"
+            echo "sd.cpp clone failed"
+            exit 1
           fi
           du -sh sd.cpp 2>/dev/null || true
           df -h
@@ -66,17 +72,69 @@ jobs:
       - name: Download models (GGUF, ~7 GB)
         run: |
           hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --local-dir ComfyUI/models
+          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q6_K-4.35GiB.gguf --local-dir ComfyUI/models
           hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF vae/flux2-vae.safetensors --local-dir ComfyUI/models
           hf download pottokao/FLUX.3-Klein-Text-Encoder-Heretic-DHQ-GGUF flux3-klein-te-heretic-dhq-Q4_K_M.gguf --local-dir ComfyUI/models/text_encoders
           hf download pottokao/FLUX.3-Klein-Text-Encoder-Heretic-DHQ-GGUF mmproj-flux3-klein-te-heretic-dhq-f16.gguf --local-dir ComfyUI/models/text_encoders
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3-VL-4B-Instruct-Q4_K_M.gguf --local-dir ComfyUI/models/text_encoders
+          huggingface-cli repo-files Qwen/Qwen3-VL-4B-Instruct-GGUF > qwen-te-files.txt 2>&1 || echo "repo-files listing failed" > qwen-te-files.txt
           ls -la ComfyUI/models/diffusion_models ComfyUI/models/text_encoders ComfyUI/models/vae
           du -sh ComfyUI/models
           df -h
 
+      - name: Try IPEX install
+        run: |
+          timeout 600 pip install intel-extension-for-pytorch || echo IPEX_FAILED
+          if python -c "import intel_extension_for_pytorch" 2>/dev/null; then
+            touch ipex_ok
+            echo "IPEX import OK"
+            python -c "import intel_extension_for_pytorch as ipex; print(ipex.__version__)"
+          else
+            echo "IPEX not usable"
+          fi
+          python -c "import torch; print('torch OK', torch.__version__)" || {
+            echo "torch broken by IPEX install, reinstalling CPU torch"
+            pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+            rm -f ipex_ok
+            python -c "import torch; print('torch restored', torch.__version__)"
+          }
+
+      - name: Capability probe (OpenVINO verdict, torch.compile, oneDNN)
+        run: |
+          cat > openvino-verdict.txt <<'EOF'
+          OpenVINO verdict for FLUX 3 Image Klein (checked 2026-11-26):
+          - OpenVINO GenAI official supported-models page lists diffusion
+            architectures: Flux (FLUX.1), FLUX.2 [klein], Qwen-Image,
+            Qwen-Image-2.1, Z-Image. No FLUX.3 / FLUX 3 Image Klein entry.
+          - Optimum Intel v2.1.0 release notes: newest FLUX support is FLUX.2.
+            No OVFlux3Pipeline / FLUX.3 mapping exists.
+          - Conclusion: OpenVINO GenAI / optimum-intel does NOT support
+            FLUX.3 Klein as of 2026-11-26. No export attempted (it would fail
+            on the missing architecture mapping).
+          - Additional blocker: the diffusers checkpoint
+            black-forest-labs/flux-3-image-klein is gated (HF login + license
+            accept); the runner has no HF token.
+          EOF
+          cat openvino-verdict.txt
+          echo "=== torch.compile in stock ComfyUI v0.44.0 ===" > capability-probe.txt
+          grep -ri "torch.compile" ComfyUI/comfy/ ComfyUI/main.py 2>/dev/null | head -20 >> capability-probe.txt || echo "no torch.compile references found" >> capability-probe.txt
+          echo "=== --compile CLI flag ===" >> capability-probe.txt
+          grep -i "compile" ComfyUI/main.py >> capability-probe.txt 2>/dev/null || echo "no --compile CLI flag in main.py" >> capability-probe.txt
+          echo "=== torch oneDNN / threads ===" >> capability-probe.txt
+          python -c "import torch; print('mkldnn:', torch.backends.mkldnn.is_available()); print('torch threads:', torch.get_num_threads())" >> capability-probe.txt 2>&1 || echo "torch check failed" >> capability-probe.txt
+          echo "=== numactl ===" >> capability-probe.txt
+          which numactl >> capability-probe.txt 2>&1 || echo "numactl: not installed" >> capability-probe.txt
+          cat capability-probe.txt
+
       - name: Start ComfyUI (CPU)
         run: |
           cd ComfyUI
-          nohup python main.py --cpu --listen 127.0.0.1 --port 8188 --disable-auto-launch > ../comfyui.log 2>&1 &
+          EXTRA=""
+          if [ -f ../ipex_ok ]; then
+            EXTRA="--disable-ipex-optimize"
+            echo "IPEX installed: starting with $EXTRA so the baseline matrix is pure torch CPU"
+          fi
+          nohup python main.py --cpu --listen 127.0.0.1 --port 8188 --disable-auto-launch $EXTRA > ../comfyui.log 2>&1 &
           cd ..
           for i in $(seq 1 60); do
             if curl -sf http://127.0.0.1:8188/system_stats > /dev/null; then
@@ -107,4 +165,9 @@ jobs:
           path: |
             results/
             comfyui.log
+            sd-cli-help.txt
+            sd-cli-flags.txt
+            qwen-te-files.txt
+            openvino-verdict.txt
+            capability-probe.txt
           if-no-files-found: warn
