@@ -26,7 +26,7 @@ on:
         required: false
         default: 'q4_k_m'
       probes:
-        description: 'comma-separated speed probes (speed stage): base,s16,s12,s8,t2,t2s12,t8s12,convdirect,easycache,cfg1'
+        description: 'comma-separated speed probes (speed stage): base,s16,s12,s8,t2,t2s12,t8s12,convdirect,easycache,cfg1,easycache-s12,q5-easycache-s12'
         required: false
         default: 'base,s16,s12,t2,convdirect'
       dit_repo:

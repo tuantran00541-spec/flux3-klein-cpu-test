@@ -511,6 +511,10 @@ SPEED_PROBES = {
     "convdirect": (None, None, 4, ["--conv-direct", "on"]),
     "easycache": (None, None, 4, ["--cache-mode", "easycache"]),
     "cfg1": (None, 1.0, 4, []),
+    # R6 combo probes: EasyCache + 12 steps. A 5th tuple element overrides
+    # the level (q5-easycache-s12 runs Q5_K_M instead of the winner).
+    "easycache-s12": (12, None, 4, ["--cache-mode", "easycache"]),
+    "q5-easycache-s12": (12, None, 4, ["--cache-mode", "easycache"], "q5_k_m"),
 }
 
 
@@ -524,7 +528,21 @@ def stage_speed(args, results):
     if winner not in LEVEL_TYPES:
         raise SystemExit("ERROR: unknown winner level %s" % winner)
     log("speed stage on winner: %s probes=%s" % (winner, args.probes))
-    gguf, typ_or_err = convert_level(models["merged"], winner, args.out)
+    # Convert GGUFs on demand, one per level actually probed. The winner
+    # is converted first; a probe with a level override (5th tuple
+    # element) converts that level lazily.
+    ggufs = {}
+
+    def get_gguf(level):
+        if level in ggufs:
+            return ggufs[level]
+        gguf, typ_or_err = convert_level(models["merged"], level, args.out)
+        if gguf is None:
+            return None, typ_or_err
+        ggufs[level] = (gguf, typ_or_err)
+        return gguf, typ_or_err
+
+    gguf, typ_or_err = get_gguf(winner)
     if gguf is None:
         results["speed"].append({"name": "speed-%s" % winner, "level": winner,
                                  "status": "skipped", "wall_seconds": 0,
@@ -539,25 +557,35 @@ def stage_speed(args, results):
                                      "error": "unknown probe %s" % pname})
             save(results, args)
             continue
-        psteps, pcfg, threads, extra = SPEED_PROBES[pname]
+        probe = SPEED_PROBES[pname]
+        psteps, pcfg, threads, extra = probe[0], probe[1], probe[2], probe[3]
+        plevel = probe[4] if len(probe) > 4 else winner
         steps = args.steps if psteps is None else psteps
         cfg = args.cfg if pcfg is None else pcfg
         if elapsed() > JOB_BUDGET_S:
-            results["speed"].append({"name": "speed-%s-%s" % (winner, pname),
-                                     "level": winner, "status": "skipped",
+            results["speed"].append({"name": "speed-%s-%s" % (plevel, pname),
+                                     "level": plevel, "status": "skipped",
                                      "wall_seconds": 0,
                                      "error": "out of time (%.0fs elapsed)" % elapsed()})
             save(results, args)
             continue
-        rec = {"name": "speed-%s-%s" % (winner, pname), "level": winner,
-               "quant_type_used": typ_or_err, "steps": steps, "cfg": cfg,
-               "threads": threads, "easycache": False,
+        pgguf, ptyp = get_gguf(plevel)
+        if pgguf is None:
+            results["speed"].append({"name": "speed-%s-%s" % (plevel, pname),
+                                     "level": plevel, "status": "skipped",
+                                     "wall_seconds": 0,
+                                     "error": "convert failed: " + ptyp})
+            save(results, args)
+            continue
+        rec = {"name": "speed-%s-%s" % (plevel, pname), "level": plevel,
+               "quant_type_used": ptyp, "steps": steps, "cfg": cfg,
+               "threads": threads, "easycache": "--cache-mode" in extra,
                "extra_flags": extra, "sigmas": args.sigmas,
                "dit_repo": args.dit_repo}
-        out_png = os.path.join(args.out, "speed-%s-%s.png" % (winner, pname))
-        st, wall, err = generate(gguf, out_png, steps, cfg, threads,
+        out_png = os.path.join(args.out, "speed-%s-%s.png" % (plevel, pname))
+        st, wall, err = generate(pgguf, out_png, steps, cfg, threads,
                                  SPEED_GEN_TIMEOUT_S,
-                                 log_path=os.path.join(args.out, "sdcpp-speed-%s-%s.log" % (winner, pname)),
+                                 log_path=os.path.join(args.out, "sdcpp-speed-%s-%s.log" % (plevel, pname)),
                                  extra_flags=extra, sigmas=args.sigmas or None)
         rec.update({"status": st, "wall_seconds": wall, "error": err,
                     "outputs": [{"file": os.path.basename(out_png),
@@ -572,11 +600,12 @@ def stage_speed(args, results):
                 rec["error"] = "metrics failed: %s" % e
         results["speed"].append(rec)
         save(results, args)
-    try:
-        os.remove(gguf)
-        log("deleted %s" % gguf)
-    except Exception as e:
-        log("could not delete %s: %s" % (gguf, e))
+    for _level, (g, _t) in ggufs.items():
+        try:
+            os.remove(g)
+            log("deleted %s" % g)
+        except Exception as e:
+            log("could not delete %s: %s" % (g, e))
 
 
 def save(results, args):
