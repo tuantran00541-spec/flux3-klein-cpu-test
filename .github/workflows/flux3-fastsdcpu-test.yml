@@ -13,6 +13,11 @@ on:
         default: 'true'
         type: choice
         options: ['true', 'false']
+      run_opt:
+        description: 'Run edit-fidelity optimization (mask-composite + strength sweep + 8 steps)'
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
 
 jobs:
   fastsdcpu-test:
@@ -53,10 +58,18 @@ jobs:
           df -h
 
       - name: Run FastSD CPU OpenVINO INT4 tests
+        if: inputs.run_opt != 'true'
         run: |
           python fastsdcpu/run_fastsdcpu.py --out results-fastsdcpu --run-edit "${{ inputs.run_edit }}" --run-1024 "${{ inputs.run_1024 }}" || true
           echo '--- results.json ---'
           cat results-fastsdcpu/results.json 2>/dev/null || echo "no results.json"
+
+      - name: Run edit-fidelity optimization
+        if: inputs.run_opt == 'true'
+        run: |
+          python fastsdcpu/run_fastsdcpu_opt.py --out results-fastsdcpu-opt || true
+          echo '--- results.json ---'
+          cat results-fastsdcpu-opt/results.json 2>/dev/null || echo "no results.json"
 
       - name: Upload artifacts
         if: always()
@@ -65,4 +78,5 @@ jobs:
           name: flux3-klein-fastsdcpu-results
           path: |
             results-fastsdcpu/
+            results-fastsdcpu-opt/
           if-no-files-found: warn
