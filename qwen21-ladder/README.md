@@ -35,12 +35,20 @@ no fp8 / tq2 rungs.
 
 1. `stage0` (steps 20, cfg 6.0) — base reference. Validates the whole
    pipeline (download -> merge -> generate).
-2. `ladder` levels `q6_k,q8_0` (steps 20, cfg 6.0) — Q6 first so the
-   plausible-stable rung lands even if Q8_0 eats the budget.
-3. `ladder` levels `q5_k_m,q4_k_m` (steps 20, cfg 6.0).
-4. `ladder` levels `q3_k,q2_k` (steps 20, cfg 6.0).
-   Speed stage only if a run remains after stage 1 (it does not in this
-   plan — OPEN unless a ladder run is skipped).
+   Run 1 (45954967560, 10m10s): FAILED fast at merge — `safetensors.numpy`
+   `TypeError: data type 'bfloat16' not understood` (numpy needs
+   `ml_dtypes` for BF16). Shard names/sizes confirmed
+   (9.97 GB + 4.26 GB, 80s download, 78.1 GB free disk). Fix: `ml_dtypes`
+   added to pip install + imported in `merge_shards`; driver now writes
+   `results.json` even on early failure. Run 2 = stage0 retry.
+2. `ladder` levels `q6_k,q5_k_m,q4_k_m` (steps 20, cfg 6.0) — the
+   plausible-stable range first (run budget is now 3 runs left, not 4).
+3. `ladder` levels `q3_k,q2_k` + `q8_0` last if time remains
+   (steps 20, cfg 6.0). Split adjusted from measured base time.
+   Speed stage only if a run remains after stage 1 (OPEN unless a ladder
+   run is skipped).
+4. (held in reserve — see 2–3; only 4 runs total were allowed and run 1
+   was spent on the merge failure).
 
 Ladder/speed runs fetch the stage-0 reference from the
 `qwen21-ladder-stage0` artifact via the GitHub API (no repo bloat, no run

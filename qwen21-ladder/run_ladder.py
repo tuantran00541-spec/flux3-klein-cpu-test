@@ -173,7 +173,14 @@ def download_models():
 
 
 def merge_shards(shard_paths):
-    """Merge DiT safetensors shards into one BF16 safetensors (numpy, no torch)."""
+    """Merge DiT safetensors shards into one BF16 safetensors (numpy, no torch).
+
+    NOTE: numpy cannot parse bfloat16 on its own - `ml_dtypes` must be
+    imported first so the dtype registers (run 1 failed here with
+    "TypeError: data type 'bfloat16' not understood" before ml_dtypes
+    was added to the workflow's pip install).
+    """
+    import ml_dtypes  # noqa: F401  (registers bfloat16 with numpy)
     from safetensors.numpy import load_file, save_file
     merged = {}
     for p in shard_paths:
@@ -482,5 +489,32 @@ def main():
     print(json.dumps(results, indent=2))
 
 
+def run():
+    """main() wrapped so an early failure (download/merge) still uploads
+    a results.json with the diagnosis instead of an empty artifact."""
+    try:
+        main()
+    except SystemExit as e:
+        if e.code not in (0, None):
+            _write_early_failure("SystemExit code %s" % e.code)
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        _write_early_failure(str(e)[:1000])
+        sys.exit(1)
+
+
+def _write_early_failure(msg):
+    try:
+        out = "results"
+        os.makedirs(out, exist_ok=True)
+        with open(os.path.join(out, "results.json"), "w") as f:
+            json.dump({"stage": "failed-early", "elapsed_seconds": round(elapsed(), 1),
+                       "error": msg, "tests": [], "speed": []}, f, indent=2)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    run()

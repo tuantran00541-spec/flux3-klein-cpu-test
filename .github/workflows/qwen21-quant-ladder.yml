@@ -57,8 +57,8 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install --quiet "huggingface_hub[cli]" numpy Pillow safetensors
-          python -c "import huggingface_hub, numpy, PIL, safetensors; print('deps OK')"
+          pip install --quiet "huggingface_hub[cli]" numpy Pillow safetensors ml_dtypes
+          python -c "import huggingface_hub, numpy, PIL, safetensors, ml_dtypes; print('deps OK')"
 
       - name: Build stable-diffusion.cpp (CPU)
         run: |
