@@ -1,0 +1,111 @@
+name: Qwen-Image-2.1 quant ladder
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'stage0 = base reference; ladder = quant levels; speed = optimize winner'
+        required: true
+        default: 'stage0'
+        type: choice
+        options: ['stage0', 'ladder', 'speed']
+      levels:
+        description: 'comma-separated ladder levels (ladder stage): q8_0,q6_k,q5_k_m,q4_k_m,q3_k,q2_k'
+        required: false
+        default: 'q6_k,q8_0'
+      steps:
+        description: 'fixed steps for the ladder (and metric ref)'
+        required: false
+        default: '20'
+      cfg:
+        description: 'fixed CFG for the whole ladder'
+        required: false
+        default: '6.0'
+      winner:
+        description: 'winning level to optimize (speed stage)'
+        required: false
+        default: 'q4_k_m'
+      probes:
+        description: 'comma-separated speed probes (speed stage): base,s16,s12,t2,convdirect'
+        required: false
+        default: 'base,s16,s12,t2,convdirect'
+      run_speed:
+        description: 'run the speed stage after the ladder stage in the same job'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+jobs:
+  quant-ladder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PIP_NO_CACHE_DIR: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          date +%s > job-start.txt
+          df -h .; nproc; free -h; lscpu | head -25
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install --quiet "huggingface_hub[cli]" numpy Pillow safetensors
+          python -c "import huggingface_hub, numpy, PIL, safetensors; print('deps OK')"
+
+      - name: Build stable-diffusion.cpp (CPU)
+        run: |
+          git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp
+          cmake -S sd.cpp -B sd.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF
+          cmake --build sd.cpp/build --config Release --target sd-cli -j4
+          ls -la sd.cpp/build/bin/
+          test -x sd.cpp/build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+          sd.cpp/build/bin/sd-cli --help > sd-cli-help.txt 2>&1 || true
+          sd.cpp/build/bin/sd-cli -M convert --help > sd-cli-convert-help.txt 2>&1 || true
+          du -sh sd.cpp; df -h .
+
+      - name: Fetch stage-0 reference artifact
+        if: ${{ inputs.stage != 'stage0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ART_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=qwen21-ladder-stage0&per_page=5" --jq '.artifacts[0].id')
+          if [ -z "$ART_ID" ] || [ "$ART_ID" = "null" ]; then
+            echo "ERROR: no qwen21-ladder-stage0 artifact found - dispatch stage0 first"
+            exit 1
+          fi
+          echo "stage0 artifact id: $ART_ID"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID/zip" > ref.zip
+          mkdir -p ref && unzip -o ref.zip -d ref/
+          ls -la ref/
+          test -f ref/base-20.png || { echo "ERROR: ref/base-20.png missing"; ls -R ref; exit 1; }
+
+      - name: Run ladder driver
+        run: |
+          mkdir -p results
+          cp sd-cli-help.txt sd-cli-convert-help.txt results/ 2>/dev/null || true
+          SPEED_FLAG=""
+          [ "${{ inputs.run_speed }}" = "true" ] && SPEED_FLAG="--run-speed" || true
+          REF=""
+          [ -f ref/base-20.png ] && REF="--ref ref/base-20.png" || true
+          echo "stage=${{ inputs.stage }} levels=${{ inputs.levels }} steps=${{ inputs.steps }} cfg=${{ inputs.cfg }} winner=${{ inputs.winner }} probes=${{ inputs.probes }} $SPEED_FLAG $REF"
+          set +e
+          time python qwen21-ladder/run_ladder.py --stage "${{ inputs.stage }}" --levels "${{ inputs.levels }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --winner "${{ inputs.winner }}" --probes "${{ inputs.probes }}" $SPEED_FLAG $REF --out results
+          echo "driver exit=$?"
+          ls -la results/
+          df -h .
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen21-ladder-${{ inputs.stage }}
+          path: results/
+          if-no-files-found: warn
