@@ -21,16 +21,35 @@ stable version, then optimize its speed.
   reference, eyeball, then delete the GGUF (disk).
 - **Most stable** = lowest precision with eyeball PASS and SSIM >= 0.85 vs
   the base reference (rule recorded in the final report).
-- **Stage 2 — speed.** Only on the winner: threads 2 vs 4, steps 12 vs
-  ladder steps, EasyCache off vs on, one variable at a time, metrics vs the
-  same reference.
+- **Stage 2 — speed.** Only on the winner: threads 2 vs 4, steps 12 / 8 vs
+  ladder steps, EasyCache off vs on, `--conv-direct on`, one variable at a
+  time, metrics vs the same reference. Probes are configurable via the
+  workflow `probes` input (`base,s12,s8,nocache,t2,convdirect`).
 
 ## Dispatch plan (max 4 runs, 120-min cap each)
 
 1. `stage0` (steps 16, cfg 3.5, stage0_steps 50) — base reference.
+   DONE 2026-11-27, run 45917327154: base-16 SUCCESS 1653.3s (metric ref);
+   base-50 TIMEOUT at 3000s (BF16 ~5x slower/step than Q4; 50 steps
+   impractical on CPU — ladder fixed at 16 steps CFG 3.5).
 2. `ladder` levels `fp8,q8_0,q6_k` (steps 16, cfg 3.5).
+   DONE 2026-11-27, run 45927331511: FP8 convert OK but gen TIMEOUT 1800s;
+   Q8_0 TIMEOUT 1800s; **Q6_K SUCCESS 516.4s, SSIM 0.9621, PSNR 29.26 dB**,
+   eyeball PASS.
 3. `ladder` levels `q5_k_m,q4_k_m,q3_k` (steps 16, cfg 3.5).
-4. `ladder` levels `q2_k,tq2` + `run_speed=true` winner=<best of runs 2-3>.
+   DONE 2026-11-27, run 45937997623: **Q5_K_M 467.2s SSIM 0.9570 PSNR 27.42
+   PASS**; **Q4_K_M 457.9s SSIM 0.9045 PSNR 24.69 PASS**; Q3_K 489.5s
+   SSIM 0.8182 PSNR 20.60 — below the 0.85 rule, FAIL (eyeball: coherent
+   swordsman but composition drifted, katana rendering off).
+   **Stage-1 verdict by the rule: Q4_K_M is the most stable** (lowest
+   precision with eyeball PASS + SSIM >= 0.85). Q5_K_M is the user's
+   pick for the speed stage: nearly as fast as Q4 (467.2s vs 457.9s)
+   with much better fidelity.
+4. `speed` winner `q5_k_m` (steps 16, cfg 3.5,
+   probes `base,s12,s8,nocache,t2,convdirect`) — user order 2026-11-27
+   "Q5km thêm cách tăng tốc vào để chạy thử xem". RUNNING, run 45946274690.
+   The Q2_K/TQ2 ladder run only happens if a run remains after this AND
+   the user hasn't redirected again.
 
 Ladder/speed runs fetch the stage-0 reference from the `quant-ladder-stage0`
 artifact via the GitHub API (no repo bloat, no run id needed).
