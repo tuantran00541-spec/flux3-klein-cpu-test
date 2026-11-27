@@ -7,15 +7,21 @@ its speed.
 
 ## Design
 
-- **Stage 0 — base reference.** Merged BF16 DiT (`Qwen/Qwen-Image-2.1`,
-  `transformer/` 2 shards, ~14 GB) + Q8_0 text encoder
+- **Stage 0 — base reference.** Merged F16 DiT (`Qwen/Qwen-Image-2.1`,
+  `transformer/` 2 shards, ~14 GB BF16 -> ~7.1 GB F16; the merged BF16
+  is 14.23 GB and CANNOT load on the 15 GiB runner — sd.cpp's weight
+  manager allows ~13.27 GB, "RAM weight capacity exceeded", run 2)
+  + Q8_0 text encoder
   (`Qwen/Qwen3-VL-8B-Instruct-GGUF`, `Qwen3VL-8B-Instruct-Q8_0.gguf`) +
   VAE (`Comfy-Org/Qwen-Image-2.1`, `vae/qwen_image_2.1_vae_bf16.safetensors`).
   Single generation at 20 steps / CFG 6.0 / euler / seed 42 / 512^2 — the
   proven sd.cpp data point for base 2.1 (Frosty40 / DogukanUrker /
   AtomicChat). Same swordsman prompt + seed as the FLUX ladder so the two
   models are comparable. No 50-step second reference: unaffordable on CPU.
-- **Stage 1 — ladder.** From merged BF16, `sd-cli -M convert` one level at
+  The BF16->F16 cast is exact except F16-subnormal tiny weights
+  (|x| < 6.1e-5) — negligible vs quant noise; merge streams one tensor
+  at a time (peak RAM ~7 GB).
+- **Stage 1 — ladder.** From merged F16, `sd-cli -M convert` one level at
   a time: Q8_0 -> Q6_K -> Q5_K_M -> Q4_K_M -> Q3_K -> Q2_K. Each level:
   generate 512^2 at fixed steps/CFG, SSIM + PSNR + mean abs diff vs the
   metric reference, eyeball, then delete the GGUF (disk).
@@ -41,14 +47,24 @@ no fp8 / tq2 rungs.
    (9.97 GB + 4.26 GB, 80s download, 78.1 GB free disk). Fix: `ml_dtypes`
    added to pip install + imported in `merge_shards`; driver now writes
    `results.json` even on early failure. Run 2 = stage0 retry.
-2. `ladder` levels `q6_k,q5_k_m,q4_k_m` (steps 20, cfg 6.0) — the
-   plausible-stable range first (run budget is now 3 runs left, not 4).
-3. `ladder` levels `q3_k,q2_k` + `q8_0` last if time remains
-   (steps 20, cfg 6.0). Split adjusted from measured base time.
+   Run 2 (45956491363, 11m21s): merge FIXED (297 tensors, 14,230,284,584 B
+   in 110s; TE 8,709,519,456 B; VAE 675,509,688 B; total driver 308s) and
+   sd.cpp DOES detect Qwen-Image-2.1 (32 layers, prompt encoded in 26s)
+   — but generation FAILED in 29.4s: `[E] RAM weight capacity exceeded.
+   Requested 14230274048 bytes, 13270585344 bytes available` — runner
+   has 15 GiB total, 14 GiB available; the BF16 DiT alone needs 14.23 GB.
+   Fix: merge casts BF16->F16 (streaming, one tensor at a time) and the
+   reference + ladder converts use the ~7.1 GB F16 file. Run 3 = stage0
+   + chained ladder.
+2. `stage0` + chained `ladder` levels `q6_k,q5_k_m,q4_k_m`
+   (steps 20, cfg 6.0, `run_ladder=true`) — the plausible-stable range
+   first (run budget is now 2 runs left, not 4; chaining saves a run).
+3. `ladder` levels `q3_k,q2_k,q8_0` (steps 20, cfg 6.0, ref from the
+   stage0 artifact) — Q3/Q2 first, Q8_0 last (likely timeout, as in FLUX).
    Speed stage only if a run remains after stage 1 (OPEN unless a ladder
    run is skipped).
-4. (held in reserve — see 2–3; only 4 runs total were allowed and run 1
-   was spent on the merge failure).
+4. (no 4th run remains in the plan — runs 1+2 were spent on the merge
+   and RAM failures; see 2–3).
 
 Ladder/speed runs fetch the stage-0 reference from the
 `qwen21-ladder-stage0` artifact via the GitHub API (no repo bloat, no run

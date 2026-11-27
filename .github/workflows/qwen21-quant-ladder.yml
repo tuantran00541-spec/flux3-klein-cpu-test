@@ -29,6 +29,12 @@ on:
         description: 'comma-separated speed probes (speed stage): base,s16,s12,t2,convdirect'
         required: false
         default: 'base,s16,s12,t2,convdirect'
+      run_ladder:
+        description: 'run the ladder stage after stage0 in the same job (reference is the just-generated PNG)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
       run_speed:
         description: 'run the speed stage after the ladder stage in the same job'
         required: false
@@ -93,11 +99,13 @@ jobs:
           cp sd-cli-help.txt sd-cli-convert-help.txt results/ 2>/dev/null || true
           SPEED_FLAG=""
           [ "${{ inputs.run_speed }}" = "true" ] && SPEED_FLAG="--run-speed" || true
+          LADDER_FLAG=""
+          [ "${{ inputs.run_ladder }}" = "true" ] && LADDER_FLAG="--run-ladder" || true
           REF=""
           [ -f ref/base-20.png ] && REF="--ref ref/base-20.png" || true
-          echo "stage=${{ inputs.stage }} levels=${{ inputs.levels }} steps=${{ inputs.steps }} cfg=${{ inputs.cfg }} winner=${{ inputs.winner }} probes=${{ inputs.probes }} $SPEED_FLAG $REF"
+          echo "stage=${{ inputs.stage }} levels=${{ inputs.levels }} steps=${{ inputs.steps }} cfg=${{ inputs.cfg }} winner=${{ inputs.winner }} probes=${{ inputs.probes }} $SPEED_FLAG $LADDER_FLAG $REF"
           set +e
-          time python qwen21-ladder/run_ladder.py --stage "${{ inputs.stage }}" --levels "${{ inputs.levels }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --winner "${{ inputs.winner }}" --probes "${{ inputs.probes }}" $SPEED_FLAG $REF --out results
+          time python qwen21-ladder/run_ladder.py --stage "${{ inputs.stage }}" --levels "${{ inputs.levels }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --winner "${{ inputs.winner }}" --probes "${{ inputs.probes }}" $SPEED_FLAG $LADDER_FLAG $REF --out results
           echo "driver exit=$?"
           ls -la results/
           df -h .

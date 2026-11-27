@@ -16,14 +16,23 @@ Differences from the FLUX ladder (documented, deliberate):
 - No 50-step second reference: stage 0 is a single base-20 generation
   (the metric reference). A 50-step base gen would not fit the 120-min cap.
 - DiT ships as 2 BF16 shards (Qwen/Qwen-Image-2.1, transformer/); they are
-  merged into one BF16 safetensors (safetensors.numpy, no torch) and the
+  merged into one F16 safetensors (safetensors.numpy, no torch) and the
   shards deleted before generation (disk). Shard names are resolved via
   HfApi.list_repo_files, not hardcoded, so a rename does not kill the run.
+  WHY F16, NOT BF16: the runner has 15 GiB RAM and sd.cpp's weight
+  manager allows ~13.27 GB; the merged BF16 DiT is 14.23 GB and fails to
+  load ("RAM weight capacity exceeded", run 2). The BF16->F16 cast is
+  exact except for F16-subnormal tiny weights (|x| < 6.1e-5, a few
+  mantissa bits) - negligible vs quant noise, the same cast the Bonsai
+  BF16->F16 diagnostics already used. The merge streams one tensor at a
+  time (safe_open) so peak RAM stays ~7 GB.
 - No fp8 / tq2 rungs: ladder is Q8_0 -> Q6_K -> Q5_K_M -> Q4_K_M -> Q3_K
-  -> Q2_K, converted from the merged BF16 with `sd-cli -M convert`.
+  -> Q2_K, converted from the merged F16 with `sd-cli -M convert`.
 
-Stage 0 (base reference): merged BF16 DiT + Q8_0 TE + VAE, 20 steps / CFG 6.
-Stage ladder: convert BF16 -> each level (one at a time), generate at fixed
+Stage 0 (base reference): merged F16 DiT + Q8_0 TE + VAE, 20 steps / CFG 6.
+With --run-ladder, the ladder runs in the same job right after stage 0
+(reuses the downloaded models; the reference is the just-generated PNG).
+Stage ladder: convert F16 -> each level (one at a time), generate at fixed
 steps/CFG, SSIM/PSNR vs the metric reference, delete the GGUF after scoring.
 Stage speed: optimize the winning level (threads, steps) one variable at a
 time, metrics vs the same reference.
@@ -56,7 +65,7 @@ TE_REPO = "Qwen/Qwen3-VL-8B-Instruct-GGUF"
 TE_FILE = "Qwen3VL-8B-Instruct-Q8_0.gguf"
 VAE_REPO = "Comfy-Org/Qwen-Image-2.1"
 VAE_FILE = "vae/qwen_image_2.1_vae_bf16.safetensors"
-MERGED_BF16 = "qwen-image-2.1-bf16.safetensors"
+MERGED_F16 = "qwen-image-2.1-f16.safetensors"
 SDCPP_BIN = "sd.cpp/build/bin/sd-cli"
 MODELS = "models"
 SEED = 42
@@ -140,28 +149,36 @@ def compute_metrics(ref_png, gen_png):
 def download_models():
     from huggingface_hub import HfApi, hf_hub_download
     api = HfApi()
-    # Resolve DiT shard names live (robust to renames); expect 2 shards.
-    files = api.list_repo_files(DIT_REPO)
-    shards = sorted(f for f in files
-                    if f.startswith(DIT_PREFIX) and f.endswith(".safetensors"))
-    log("DiT shards in %s: %s" % (DIT_REPO, shards))
-    if not shards:
-        raise SystemExit("ERROR: no DiT shards found in %s" % DIT_REPO)
+    merged_path = os.path.join(MODELS, MERGED_F16)
     paths = {}
-    paths["shards"] = [hf_hub_download(repo_id=DIT_REPO, filename=s,
-                                       local_dir=MODELS) for s in shards]
-    for p in paths["shards"]:
-        log("shard: %s (%d bytes)" % (p, os.path.getsize(p)))
-    disk_log("after-shard-download")
-    paths["merged"] = merge_shards(paths["shards"])
-    # Free disk: shards are no longer needed once merged.
-    for p in paths["shards"]:
-        try:
-            os.remove(p)
-            log("deleted shard %s" % p)
-        except Exception as e:
-            log("could not delete %s: %s" % (p, e))
-    disk_log("after-merge")
+    if os.path.exists(merged_path) and os.path.getsize(merged_path) > 1000000000:
+        # Chained run (stage0 -> ladder in one job): reuse the merged F16.
+        log("merged F16 already exists, reusing: %s (%d bytes)"
+            % (merged_path, os.path.getsize(merged_path)))
+        paths["merged"] = merged_path
+        disk_log("reuse-merged")
+    else:
+        # Resolve DiT shard names live (robust to renames); expect 2 shards.
+        files = api.list_repo_files(DIT_REPO)
+        shards = sorted(f for f in files
+                        if f.startswith(DIT_PREFIX) and f.endswith(".safetensors"))
+        log("DiT shards in %s: %s" % (DIT_REPO, shards))
+        if not shards:
+            raise SystemExit("ERROR: no DiT shards found in %s" % DIT_REPO)
+        paths["shards"] = [hf_hub_download(repo_id=DIT_REPO, filename=s,
+                                           local_dir=MODELS) for s in shards]
+        for p in paths["shards"]:
+            log("shard: %s (%d bytes)" % (p, os.path.getsize(p)))
+        disk_log("after-shard-download")
+        paths["merged"] = merge_shards(paths["shards"])
+        # Free disk: shards are no longer needed once merged.
+        for p in paths["shards"]:
+            try:
+                os.remove(p)
+                log("deleted shard %s" % p)
+            except Exception as e:
+                log("could not delete %s: %s" % (p, e))
+        disk_log("after-merge")
     paths["te"] = hf_hub_download(repo_id=TE_REPO, filename=TE_FILE,
                                   local_dir=MODELS)
     paths["vae"] = hf_hub_download(repo_id=VAE_REPO, filename=VAE_FILE,
@@ -173,27 +190,36 @@ def download_models():
 
 
 def merge_shards(shard_paths):
-    """Merge DiT safetensors shards into one BF16 safetensors (numpy, no torch).
+    """Merge DiT safetensors shards into one F16 safetensors (numpy, no torch).
 
+    Streams one tensor at a time (safe_open) and casts BF16 -> F16, so
+    peak RAM stays ~7 GB instead of the ~14 GB a whole-shard load needs.
     NOTE: numpy cannot parse bfloat16 on its own - `ml_dtypes` must be
     imported first so the dtype registers (run 1 failed here with
     "TypeError: data type 'bfloat16' not understood" before ml_dtypes
-    was added to the workflow's pip install).
+    was added to the workflow's pip install). The BF16->F16 cast is
+    exact except for F16-subnormal tiny weights (|x| < 6.1e-5) - see
+    the module docstring for why F16 (not BF16) is the reference.
     """
     import ml_dtypes  # noqa: F401  (registers bfloat16 with numpy)
-    from safetensors.numpy import load_file, save_file
+    from safetensors import safe_open
+    from safetensors.numpy import save_file
     merged = {}
     for p in shard_paths:
-        d = load_file(p)
-        log("merge: %s has %d tensors" % (os.path.basename(p), len(d)))
-        dup = set(merged) & set(d)
-        if dup:
-            log("WARNING: %d duplicate keys across shards (later wins): %s"
-                % (len(dup), sorted(dup)[:5]))
-        merged.update(d)
-    out = os.path.join(MODELS, MERGED_BF16)
+        n = 0
+        with safe_open(p, framework="numpy") as f:
+            for k in f.keys():
+                t = f.get_tensor(k)
+                if str(t.dtype) == "bfloat16":
+                    t = t.astype(np.float16)
+                if k in merged:
+                    log("WARNING: duplicate key across shards (later wins): %s" % k)
+                merged[k] = t
+                n += 1
+        log("merge: %s streamed %d tensors" % (os.path.basename(p), n))
+    out = os.path.join(MODELS, MERGED_F16)
     save_file(merged, out, metadata={"format": "pt"})
-    log("merged %d tensors -> %s (%d bytes)"
+    log("merged %d tensors (F16) -> %s (%d bytes)"
         % (len(merged), out, os.path.getsize(out)))
     return out
 
@@ -209,11 +235,11 @@ def load_help():
         log("sd-cli help file missing (%s)" % e)
 
 
-def convert_level(bf16_path, level, out_dir):
-    """Convert merged BF16 -> level GGUF. Returns (gguf_path, type_used) or (None, err)."""
+def convert_level(f16_path, level, out_dir):
+    """Convert merged F16 -> level GGUF. Returns (gguf_path, type_used) or (None, err)."""
     for typ in LEVEL_TYPES[level]:
         out = os.path.join(out_dir, "qwen21-base-%s.gguf" % level)
-        cmd = [SDCPP_BIN, "-M", "convert", "--diffusion-model", bf16_path,
+        cmd = [SDCPP_BIN, "-M", "convert", "--diffusion-model", f16_path,
                "--type", typ, "-o", out]
         log("convert %s as %s ..." % (level, typ))
         t0 = time.time()
@@ -281,10 +307,14 @@ def generate(model_path, out_png, steps, cfg, threads, timeout_s,
 # ---- stages ----
 
 def stage0(args, results):
-    """Base BF16 reference: merged BF16 at the ladder steps/CFG (single gen)."""
+    """Base F16 reference: merged F16 at the ladder steps/CFG (single gen).
+
+    With --run-ladder, the ladder follows in the same job, scored vs the
+    just-generated reference (only if the reference generation succeeded).
+    """
     models = download_models()
-    rec = {"name": "base-%dstep" % args.steps, "level": "bf16",
-           "quant_type_used": "bf16", "steps": args.steps, "cfg": args.cfg,
+    rec = {"name": "base-%dstep" % args.steps, "level": "f16",
+           "quant_type_used": "f16", "steps": args.steps, "cfg": args.cfg,
            "threads": 4, "easycache": False}
     out_png = os.path.join(args.out, "base-%d.png" % args.steps)
     st, wall, err = generate(models["merged"], out_png, args.steps, args.cfg, 4,
@@ -296,10 +326,22 @@ def stage0(args, results):
                 if st == "success" else []})
     results["tests"].append(rec)
     save(results, args)
+    if args.run_ladder:
+        if st != "success":
+            log("stage0 FAILED - skipping chained ladder")
+            results["tests"].append({"name": "ladder-chained", "level": "",
+                                     "status": "skipped",
+                                     "error": "stage0 reference failed",
+                                     "wall_seconds": 0})
+            save(results, args)
+        else:
+            args.ref = out_png
+            log("chained ladder: ref=%s levels=%s" % (args.ref, args.levels))
+            stage_ladder(args, results)
 
 
 def stage_ladder(args, results):
-    """Convert merged BF16 -> each level, generate at fixed steps/CFG, score vs ref."""
+    """Convert merged F16 -> each level, generate at fixed steps/CFG, score vs ref."""
     models = download_models()
     ref = args.ref
     if not ref or not os.path.exists(ref):
@@ -452,6 +494,9 @@ def main():
                     help="winning level to optimize (speed stage)")
     ap.add_argument("--probes", default="base,s16,s12,t2,convdirect",
                     help="comma-separated speed probes (speed stage)")
+    ap.add_argument("--run-ladder", action="store_true",
+                    help="run the ladder stage after stage0 in the same job "
+                         "(reference is the just-generated PNG)")
     ap.add_argument("--run-speed", action="store_true",
                     help="run the speed stage after the ladder stage (one job)")
     ap.add_argument("--ref", default="",
@@ -470,7 +515,8 @@ def main():
                "seed": SEED,
                "winner": args.winner, "probes": args.probes,
                "prompt": T2I_PROMPT,
-               "base_checkpoint": DIT_REPO + " transformer/ (merged BF16)",
+               "base_checkpoint": DIT_REPO + " transformer/ (merged, BF16->F16 "
+                                  "value-exact cast except F16-subnormal tiny weights)",
                "text_encoder": TE_REPO + " " + TE_FILE,
                "vae": VAE_REPO + " " + VAE_FILE,
                "license": "Qwen-Image-2.1 is under the Qwen Research License "
