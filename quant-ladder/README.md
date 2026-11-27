@@ -47,9 +47,18 @@ stable version, then optimize its speed.
    with much better fidelity.
 4. `speed` winner `q5_k_m` (steps 16, cfg 3.5,
    probes `base,s12,s8,nocache,t2,convdirect`) — user order 2026-11-27
-   "Q5km thêm cách tăng tốc vào để chạy thử xem". RUNNING, run 45946274690.
-   The Q2_K/TQ2 ladder run only happens if a run remains after this AND
-   the user hasn't redirected again.
+   "Q5km thêm cách tăng tốc vào để chạy thử xem". DONE 2026-11-27, run
+   45946274690 (success, ~121 min — nearly hit the 120-min cap because
+   this host was ~2x slower than run 2's host; only WITHIN-run wall
+   times are comparable):
+   base 1037.4s SSIM 0.9485; **s12 771.3s SSIM 0.9116 — 26% faster than
+   in-run base, image still clean (best speed config)**; s8 767.7s
+   SSIM 0.8762 — no faster than s12, lower fidelity, not worth it;
+   nocache 1477.3s SSIM 0.9354 — EasyCache off costs +42%, keep it on;
+   t2 1110.0s — 2 threads only +7% slower (byte-identical image);
+   convdirect 1039.6s — `--conv-direct on` does nothing on CPU
+   (byte-identical image). All six probes eyeball PASS.
+   The Q2_K/TQ2 ladder run (run 4 of 4) only happens if the user orders it.
 
 Ladder/speed runs fetch the stage-0 reference from the `quant-ladder-stage0`
 artifact via the GitHub API (no repo bloat, no run id needed).
