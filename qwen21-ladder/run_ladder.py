@@ -92,7 +92,7 @@ SEED = 42
 JOB_BUDGET_S = 6000  # stop starting new levels after this (leave time to upload)
 STAGE0_GEN_TIMEOUT_S = 3600
 LADDER_GEN_TIMEOUT_S = 2700
-SPEED_GEN_TIMEOUT_S = 1800
+SPEED_GEN_TIMEOUT_S = 2700  # t2 at 20 steps may run ~2x the 4-thread time
 
 LEVEL_TYPES = {
     "q8_0": ["q8_0"],
@@ -166,7 +166,7 @@ def compute_metrics(ref_png, gen_png):
 
 # ---- model downloads + DiT shard merge ----
 
-def download_models():
+def download_models(dit_repo=DIT_REPO):
     from huggingface_hub import HfApi, hf_hub_download
     api = HfApi()
     merged_path = os.path.join(MODELS, MERGED_F16)
@@ -179,13 +179,13 @@ def download_models():
         disk_log("reuse-merged")
     else:
         # Resolve DiT shard names live (robust to renames); expect 2 shards.
-        files = api.list_repo_files(DIT_REPO)
+        files = api.list_repo_files(dit_repo)
         shards = sorted(f for f in files
                         if f.startswith(DIT_PREFIX) and f.endswith(".safetensors"))
-        log("DiT shards in %s: %s" % (DIT_REPO, shards))
+        log("DiT shards in %s: %s" % (dit_repo, shards))
         if not shards:
-            raise SystemExit("ERROR: no DiT shards found in %s" % DIT_REPO)
-        paths["shards"] = [hf_hub_download(repo_id=DIT_REPO, filename=s,
+            raise SystemExit("ERROR: no DiT shards found in %s" % dit_repo)
+        paths["shards"] = [hf_hub_download(repo_id=dit_repo, filename=s,
                                            local_dir=MODELS) for s in shards]
         for p in paths["shards"]:
             log("shard: %s (%d bytes)" % (p, os.path.getsize(p)))
@@ -285,7 +285,7 @@ def convert_level(f16_path, level, out_dir):
 
 
 def generate(model_path, out_png, steps, cfg, threads, timeout_s,
-             log_path=None, extra_flags=None):
+             log_path=None, extra_flags=None, sigmas=None):
     """One sd-cli txt2img run. Returns (status, wall_seconds, error)."""
     cmd = [SDCPP_BIN,
            "--diffusion-model", model_path,
@@ -301,6 +301,8 @@ def generate(model_path, out_png, steps, cfg, threads, timeout_s,
         cmd += ["--seed", str(SEED)]
     if "--offload-to-cpu" in SDCLI_HELP:
         cmd.append("--offload-to-cpu")
+    if sigmas:
+        cmd += ["--sigmas", sigmas]
     if extra_flags:
         cmd += list(extra_flags)
     log("generate %s (steps=%s cfg=%s threads=%s timeout=%ss)"
@@ -492,18 +494,29 @@ def stage_ladder(args, results):
 # Speed probes: name -> (steps or None=ladder steps, cfg or None=ladder cfg,
 # threads, extra sd-cli flags). Order matters: the most important probes
 # first, so a cut-short job still has the key data.
+# easycache: sd.cpp --cache-mode easycache (DiT); unproven for Qwen
+#   flow-matching - FLUX found it essential (off = +42% time), measure here.
+# cfg1: CFG 1.0 - sd.cpp skips the unconditional pass, may nearly halve
+#   DiT compute; quality cost unknown for Qwen, measure it.
+# t2s12/t8s12: thread scaling at 12 steps (vs s12 at 4 threads); runner
+#   has 4 vCPUs, FLUX found 4 right - verify for Qwen.
 SPEED_PROBES = {
     "base": (None, None, 4, []),
     "s16": (16, None, 4, []),
     "s12": (12, None, 4, []),
+    "s8": (8, None, 4, []),
     "t2": (None, None, 2, []),
+    "t2s12": (12, None, 2, []),
+    "t8s12": (12, None, 8, []),
     "convdirect": (None, None, 4, ["--conv-direct", "on"]),
+    "easycache": (None, None, 4, ["--cache-mode", "easycache"]),
+    "cfg1": (None, 1.0, 4, []),
 }
 
 
 def stage_speed(args, results):
     """Optimize the winning level: threads, steps, one at a time."""
-    models = download_models()
+    models = download_models(args.dit_repo)
     ref = args.ref
     if not ref or not os.path.exists(ref):
         raise SystemExit("ERROR: reference PNG missing (%s) - dispatch stage0 first" % ref)
@@ -539,12 +552,13 @@ def stage_speed(args, results):
         rec = {"name": "speed-%s-%s" % (winner, pname), "level": winner,
                "quant_type_used": typ_or_err, "steps": steps, "cfg": cfg,
                "threads": threads, "easycache": False,
-               "extra_flags": extra}
+               "extra_flags": extra, "sigmas": args.sigmas,
+               "dit_repo": args.dit_repo}
         out_png = os.path.join(args.out, "speed-%s-%s.png" % (winner, pname))
         st, wall, err = generate(gguf, out_png, steps, cfg, threads,
                                  SPEED_GEN_TIMEOUT_S,
                                  log_path=os.path.join(args.out, "sdcpp-speed-%s-%s.log" % (winner, pname)),
-                                 extra_flags=extra)
+                                 extra_flags=extra, sigmas=args.sigmas or None)
         rec.update({"status": st, "wall_seconds": wall, "error": err,
                     "outputs": [{"file": os.path.basename(out_png),
                                  "bytes": os.path.getsize(out_png)}]
@@ -583,6 +597,10 @@ def main():
                     help="fixed CFG for the whole ladder")
     ap.add_argument("--winner", default="q4_k_m",
                     help="winning level to optimize (speed stage)")
+    ap.add_argument("--dit-repo", default=DIT_REPO,
+                    help="DiT checkpoint repo (base Qwen-Image-2.1 or Turbo)")
+    ap.add_argument("--sigmas", default="",
+                    help="sd-cli --sigmas preset (e.g. qwen-image-2.1-turbo)")
     ap.add_argument("--probes", default="base,s16,s12,t2,convdirect",
                     help="comma-separated speed probes (speed stage)")
     ap.add_argument("--run-ladder", action="store_true",
@@ -605,6 +623,7 @@ def main():
                "steps": args.steps, "cfg": args.cfg,
                "seed": SEED,
                "winner": args.winner, "probes": args.probes,
+               "dit_repo": args.dit_repo, "sigmas": args.sigmas,
                "prompt": T2I_PROMPT,
                "base_checkpoint": DIT_REPO + " transformer/ (merged, BF16->F16 "
                                   "cast; reference is a Q8_0/Q6_K GGUF - the 14.23 GB "

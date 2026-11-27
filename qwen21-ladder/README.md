@@ -122,9 +122,43 @@ two PNGs + `results.json` (reconstructed verbatim from the job log —
 the 5.8 GB artifact download was cut short by the VM disk quota)
 are in `~/workspace/flux3-klein-cpu-test/results-qwen21-ladder/q8ref/`.
 
-Ladder/speed runs fetch the stage-0 reference from the
-`qwen21-ladder-stage0` artifact via the GitHub API (no repo bloat, no run
-id needed).
+## Speed stage (2026-11-27, max 6 runs)
+
+Baseline (run 4): Q6_K, 20 steps / CFG 6.0 / 4 threads, 1233.5s, clean.
+Reference PNG is `base-20.png` (Q6_K) in the `qwen21-ladder-q8ref`
+artifact — the workflow fetches that artifact, NOT any stage0 artifact
+(those runs failed before generating it). Same prompt/seed/512^2.
+
+Probes (one variable at a time, SSIM/PSNR vs base-20.png + eyeball):
+`base` (20-step control), `s16`/`s12`/`s8` (step cut), `t2`/`t2s12`/
+`t8s12` (thread scaling; runner has 4 vCPUs), `convdirect`
+(`--conv-direct on`; FLUX: no effect), `easycache` (`--cache-mode
+easycache`; FLUX: essential, off = +42% — unproven for Qwen),
+`cfg1` (CFG 1.0 — sd.cpp may skip the unconditional pass).
+
+Runs:
+1. `speed` winner=q6_k probes=base,s12,s8 — control + step cut.
+2. `speed` winner=q6_k probes=easycache,cfg1,convdirect.
+3. `speed` winner=q6_k probes=t2s12,t8s12 — threads at 12 steps.
+4. `speed` winner=q5_k_m probes=base,s12 — Q5 vs Q6 at 20 and 12 steps
+   (Q5 was 3% faster but SSIM 0.72 pose drift at 20 steps).
+5. `speed` winner=q6_k dit_repo=Qwen/Qwen-Image-2.1-Turbo steps=8
+   cfg=1.0 sigmas=qwen-image-2.1-turbo probes=base,easycache — Turbo is
+   the distilled 8-step checkpoint (same 7B arch, CFG=1 default).
+6. Reserve: best-combo confirmation, or OpenVINO INT4 scoping
+   (OpenVINO GenAI lists Qwen-Image-2.1 as supported — FLUX FastSD
+   lane did 512^2 in ~136s; NOT built here unless a one-run test fits).
+
+Inapplicable / not probed: `--diffusion-fa` (flash attention is already
+ON by default on CPU per the stage0 log), VAE tiling/offload
+(`--offload-to-cpu` already passed; VAE decode is a small share of
+~1233s), `--conv-direct` on VAE (same reason). FP8/Q8_0 generation
+already timed out in the ladder — no re-test.
+
+Ladder/speed runs fetch the reference from the
+`qwen21-ladder-q8ref` artifact via the GitHub API (no repo bloat, no run
+id needed); the workflow deletes the artifact's GGUF after unzip to
+protect disk.
 
 ## Files
 

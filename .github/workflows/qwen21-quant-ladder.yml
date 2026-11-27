@@ -26,9 +26,17 @@ on:
         required: false
         default: 'q4_k_m'
       probes:
-        description: 'comma-separated speed probes (speed stage): base,s16,s12,t2,convdirect'
+        description: 'comma-separated speed probes (speed stage): base,s16,s12,s8,t2,t2s12,t8s12,convdirect,easycache,cfg1'
         required: false
         default: 'base,s16,s12,t2,convdirect'
+      dit_repo:
+        description: 'DiT checkpoint repo (speed stage; Turbo = Qwen/Qwen-Image-2.1-Turbo)'
+        required: false
+        default: 'Qwen/Qwen-Image-2.1'
+      sigmas:
+        description: 'sd-cli --sigmas preset (speed stage; Turbo = qwen-image-2.1-turbo)'
+        required: false
+        default: ''
       run_ladder:
         description: 'run the ladder stage after stage0 in the same job (reference is the just-generated PNG)'
         required: false
@@ -77,22 +85,26 @@ jobs:
           sd.cpp/build/bin/sd-cli -M convert --help > sd-cli-convert-help.txt 2>&1 || true
           du -sh sd.cpp; df -h .
 
-      - name: Fetch stage-0 reference artifact
+      - name: Fetch q8ref reference artifact
         # Only for a standalone ladder/speed run. stage0 and q8ref build
-        # their own reference in-job (no usable stage0 artifact exists:
-        # BF16/F16 cannot load on the 15 GiB runner).
+        # their own reference in-job. The reference PNG (base-20.png,
+        # Q6_K) lives in the qwen21-ladder-q8ref artifact - NOT in any
+        # stage0 artifact (those runs failed before generating it).
         if: ${{ inputs.stage != 'stage0' && inputs.stage != 'q8ref' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ART_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=qwen21-ladder-stage0&per_page=5" --jq '.artifacts[0].id')
+          ART_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=qwen21-ladder-q8ref&per_page=5" --jq '.artifacts[0].id')
           if [ -z "$ART_ID" ] || [ "$ART_ID" = "null" ]; then
-            echo "ERROR: no qwen21-ladder-stage0 artifact found - dispatch stage0 first"
+            echo "ERROR: no qwen21-ladder-q8ref artifact found - dispatch q8ref first"
             exit 1
           fi
-          echo "stage0 artifact id: $ART_ID"
+          echo "q8ref artifact id: $ART_ID"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID/zip" > ref.zip
           mkdir -p ref && unzip -o ref.zip -d ref/
+          # The artifact is ~5.8 GB, mostly the Q6_K GGUF the speed run
+          # re-converts anyway: drop it (and the zip) to protect disk.
+          rm -f ref.zip ref/*.gguf
           ls -la ref/
           test -f ref/base-20.png || { echo "ERROR: ref/base-20.png missing"; ls -R ref; exit 1; }
 
@@ -108,7 +120,7 @@ jobs:
           [ -f ref/base-20.png ] && REF="--ref ref/base-20.png" || true
           echo "stage=${{ inputs.stage }} levels=${{ inputs.levels }} steps=${{ inputs.steps }} cfg=${{ inputs.cfg }} winner=${{ inputs.winner }} probes=${{ inputs.probes }} $SPEED_FLAG $LADDER_FLAG $REF"
           set +e
-          time python qwen21-ladder/run_ladder.py --stage "${{ inputs.stage }}" --levels "${{ inputs.levels }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --winner "${{ inputs.winner }}" --probes "${{ inputs.probes }}" $SPEED_FLAG $LADDER_FLAG $REF --out results
+          time python qwen21-ladder/run_ladder.py --stage "${{ inputs.stage }}" --levels "${{ inputs.levels }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --winner "${{ inputs.winner }}" --probes "${{ inputs.probes }}" --dit-repo "${{ inputs.dit_repo }}" --sigmas "${{ inputs.sigmas }}" $SPEED_FLAG $LADDER_FLAG $REF --out results
           echo "driver exit=$?"
           ls -la results/
           df -h .
