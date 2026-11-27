@@ -21,17 +21,37 @@ Differences from the FLUX ladder (documented, deliberate):
   HfApi.list_repo_files, not hardcoded, so a rename does not kill the run.
   WHY F16, NOT BF16: the runner has 15 GiB RAM and sd.cpp's weight
   manager allows ~13.27 GB; the merged BF16 DiT is 14.23 GB and fails to
-  load ("RAM weight capacity exceeded", run 2). The BF16->F16 cast is
-  exact except for F16-subnormal tiny weights (|x| < 6.1e-5, a few
-  mantissa bits) - negligible vs quant noise, the same cast the Bonsai
-  BF16->F16 diagnostics already used. The merge streams one tensor at a
-  time (safe_open) so peak RAM stays ~7 GB.
+  load ("RAM weight capacity exceeded", run 2). CORRECTION (run 3): F16
+  does NOT halve anything - BF16 and F16 are both 2 bytes/element, so
+  the merged F16 file is 14,230,284,288 bytes, essentially the same size,
+  and fails to load the same way ("Requested 14230274048 bytes,
+  12774645760 bytes available", run 3). The F16 merge is therefore NOT
+  a fix, only a dtype cast. The fix that fits: quantize to Q8_0 GGUF
+  (1 byte/param, ~7.5 GB). `sd-cli -M convert` streams tensors and
+  uses ~2.6 GB RAM even for an 11.1 GB BF16 model (rubensalas.dev,
+  FLUX.3 Klein recipe), so the convert itself fits on the runner.
+  The merge streams one tensor at a time (safe_open) so peak RAM stays
+  ~7 GB during the merge (the F16 dict); the merge output is still
+  needed as the convert source.
 - No fp8 / tq2 rungs: ladder is Q8_0 -> Q6_K -> Q5_K_M -> Q4_K_M -> Q3_K
   -> Q2_K, converted from the merged F16 with `sd-cli -M convert`.
 
 Stage 0 (base reference): merged F16 DiT + Q8_0 TE + VAE, 20 steps / CFG 6.
 With --run-ladder, the ladder runs in the same job right after stage 0
 (reuses the downloaded models; the reference is the just-generated PNG).
+NOTE: stage0 CANNOT succeed on the 15 GiB runner (F16 is 14.23 GB, same
+as BF16 - see above). The working reference stage is `q8ref` below.
+
+Stage q8ref (Q8_0 reference, the stage that actually runs): convert the
+merged F16 -> Q8_0 GGUF with `sd-cli -M convert` (streaming, ~2.6 GB
+RAM), generate the reference from that GGUF at 20 steps / CFG 6.0. If
+the Q8_0 reference generation fails/times out, fall back to Q6_K as the
+reference (convert + generate). The reference is therefore the highest
+precision that loads on this runner - NOT true BF16; ladder SSIMs are
+vs that reference, and the report must say so. Ladder rungs are each
+converted once from the merged F16 (clean provenance, no double
+quantization), never from the reference GGUF. With --run-ladder, the
+ladder follows in the same job (levels below the reference only).
 Stage ladder: convert F16 -> each level (one at a time), generate at fixed
 steps/CFG, SSIM/PSNR vs the metric reference, delete the GGUF after scoring.
 Stage speed: optimize the winning level (threads, steps) one variable at a
@@ -306,6 +326,77 @@ def generate(model_path, out_png, steps, cfg, threads, timeout_s,
 
 # ---- stages ----
 
+REF_CANDIDATES = ["q8_0", "q6_k"]  # highest precision that loads, in order
+REF_GEN_TIMEOUT_S = 3600  # Q8_0 is ~3x slower than Q6_K on CPU (FLUX data)
+
+
+def stage_q8ref(args, results):
+    """Q8_0 (fallback Q6_K) reference: convert F16 -> candidate GGUF, generate.
+
+    The 14.23 GB BF16/F16 DiT cannot load on the 15 GiB runner, so the
+    reference is the highest-precision GGUF that both converts and
+    generates. Ladder rungs convert once from the merged F16 (never from
+    the reference GGUF). With --run-ladder, the ladder follows in the
+    same job, scored vs the just-generated reference.
+    """
+    models = download_models()
+    ref_png = None
+    ref_level = None
+    for cand in REF_CANDIDATES:
+        if elapsed() > JOB_BUDGET_S:
+            log("out of time before trying ref candidate %s" % cand)
+            break
+        gguf, typ_or_err = convert_level(models["merged"], cand, args.out)
+        if gguf is None:
+            rec = {"name": "base-%dstep" % args.steps, "level": cand,
+                   "quant_type_used": cand, "steps": args.steps,
+                   "cfg": args.cfg, "threads": 4, "easycache": False,
+                   "status": "skipped", "wall_seconds": 0,
+                   "error": "ref convert failed: " + typ_or_err, "outputs": []}
+            results["tests"].append(rec)
+            save(results, args)
+            continue
+        rec = {"name": "base-%dstep" % args.steps, "level": cand,
+               "quant_type_used": typ_or_err, "steps": args.steps,
+               "cfg": args.cfg, "threads": 4, "easycache": False,
+               "gguf_bytes": os.path.getsize(gguf)}
+        out_png = os.path.join(args.out, "base-%d.png" % args.steps)
+        st, wall, err = generate(gguf, out_png, args.steps, args.cfg, 4,
+                                 REF_GEN_TIMEOUT_S,
+                                 log_path=os.path.join(args.out, "sdcpp-base-%d.log" % args.steps))
+        rec.update({"status": st, "wall_seconds": wall, "error": err,
+                    "outputs": [{"file": os.path.basename(out_png),
+                                 "bytes": os.path.getsize(out_png)}]
+                    if st == "success" else []})
+        results["tests"].append(rec)
+        save(results, args)
+        if st == "success":
+            ref_png, ref_level = out_png, cand
+            log("reference established: %s GGUF (%.1fs)" % (cand, wall))
+            break
+        log("ref candidate %s FAILED (%s) - trying next" % (cand, err))
+        try:
+            os.remove(gguf)
+            log("deleted failed ref %s" % gguf)
+        except Exception as e:
+            log("could not delete %s: %s" % (gguf, e))
+    if ref_png is None:
+        log("NO reference established - ladder cannot run")
+        results["tests"].append({"name": "ladder-chained", "level": "",
+                                 "status": "skipped",
+                                 "error": "no reference established",
+                                 "wall_seconds": 0})
+        save(results, args)
+        return
+    results["reference_level"] = ref_level
+    if args.run_ladder:
+        args.levels = [l for l in args.levels if l != ref_level]
+        args.ref = ref_png
+        log("chained ladder: ref=%s (level %s) levels=%s"
+            % (args.ref, ref_level, args.levels))
+        stage_ladder(args, results)
+
+
 def stage0(args, results):
     """Base F16 reference: merged F16 at the ladder steps/CFG (single gen).
 
@@ -483,7 +574,7 @@ def save(results, args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
-                    choices=["stage0", "ladder", "speed"])
+                    choices=["stage0", "q8ref", "ladder", "speed"])
     ap.add_argument("--levels", default="",
                     help="comma-separated ladder levels (ladder stage)")
     ap.add_argument("--steps", type=int, default=20,
@@ -516,7 +607,8 @@ def main():
                "winner": args.winner, "probes": args.probes,
                "prompt": T2I_PROMPT,
                "base_checkpoint": DIT_REPO + " transformer/ (merged, BF16->F16 "
-                                  "value-exact cast except F16-subnormal tiny weights)",
+                                  "cast; reference is a Q8_0/Q6_K GGUF - the 14.23 GB "
+                                  "BF16/F16 cannot load on the 15 GiB runner)",
                "text_encoder": TE_REPO + " " + TE_FILE,
                "vae": VAE_REPO + " " + VAE_FILE,
                "license": "Qwen-Image-2.1 is under the Qwen Research License "
@@ -524,6 +616,8 @@ def main():
                "tests": [], "speed": []}
     if args.stage == "stage0":
         stage0(args, results)
+    elif args.stage == "q8ref":
+        stage_q8ref(args, results)
     elif args.stage == "ladder":
         stage_ladder(args, results)
         if args.run_speed:

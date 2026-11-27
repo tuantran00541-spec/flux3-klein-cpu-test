@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: 'stage0 = base reference; ladder = quant levels; speed = optimize winner'
+        description: 'stage0 = base reference (cannot load on 15GiB runner); q8ref = Q8_0/Q6_K reference + ladder; ladder = quant levels; speed = optimize winner'
         required: true
-        default: 'stage0'
+        default: 'q8ref'
         type: choice
-        options: ['stage0', 'ladder', 'speed']
+        options: ['stage0', 'q8ref', 'ladder', 'speed']
       levels:
         description: 'comma-separated ladder levels (ladder stage): q8_0,q6_k,q5_k_m,q4_k_m,q3_k,q2_k'
         required: false
-        default: 'q6_k,q8_0'
+        default: 'q6_k,q5_k_m,q4_k_m,q3_k,q2_k'
       steps:
         description: 'fixed steps for the ladder (and metric ref)'
         required: false
@@ -78,7 +78,10 @@ jobs:
           du -sh sd.cpp; df -h .
 
       - name: Fetch stage-0 reference artifact
-        if: ${{ inputs.stage != 'stage0' }}
+        # Only for a standalone ladder/speed run. stage0 and q8ref build
+        # their own reference in-job (no usable stage0 artifact exists:
+        # BF16/F16 cannot load on the 15 GiB runner).
+        if: ${{ inputs.stage != 'stage0' && inputs.stage != 'q8ref' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

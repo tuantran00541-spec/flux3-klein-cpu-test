@@ -8,19 +8,26 @@ its speed.
 ## Design
 
 - **Stage 0 — base reference.** Merged F16 DiT (`Qwen/Qwen-Image-2.1`,
-  `transformer/` 2 shards, ~14 GB BF16 -> ~7.1 GB F16; the merged BF16
+  `transformer/` 2 shards, ~14 GB BF16 (merged F16 is the same size —
+  both are 2 bytes/element); the merged BF16
   is 14.23 GB and CANNOT load on the 15 GiB runner — sd.cpp's weight
   manager allows ~13.27 GB, "RAM weight capacity exceeded", run 2)
   + Q8_0 text encoder
   (`Qwen/Qwen3-VL-8B-Instruct-GGUF`, `Qwen3VL-8B-Instruct-Q8_0.gguf`) +
   VAE (`Comfy-Org/Qwen-Image-2.1`, `vae/qwen_image_2.1_vae_bf16.safetensors`).
+  CORRECTION (run 3): F16 does NOT halve anything — BF16 and F16 are
+  both 2 bytes/element, so the merged F16 file is 14,230,284,288 bytes
+  and fails to load the same way ("Requested 14230274048 bytes,
+  12774645760 bytes available"). Stage 0 as defined CANNOT succeed on
+  this runner. The working reference stage is `q8ref`: convert the
+  merged F16 -> Q8_0 GGUF (`sd-cli -M convert` streams tensors, ~2.6 GB
+  RAM per the FLUX.3 Klein recipe) and generate the reference from it;
+  fallback Q6_K if Q8_0 generation fails. Ladder SSIMs are therefore
+  vs a Q8_0 (or Q6_K) reference, NOT true BF16 — the report must say so.
   Single generation at 20 steps / CFG 6.0 / euler / seed 42 / 512^2 — the
   proven sd.cpp data point for base 2.1 (Frosty40 / DogukanUrker /
   AtomicChat). Same swordsman prompt + seed as the FLUX ladder so the two
   models are comparable. No 50-step second reference: unaffordable on CPU.
-  The BF16->F16 cast is exact except F16-subnormal tiny weights
-  (|x| < 6.1e-5) — negligible vs quant noise; merge streams one tensor
-  at a time (peak RAM ~7 GB).
 - **Stage 1 — ladder.** From merged F16, `sd-cli -M convert` one level at
   a time: Q8_0 -> Q6_K -> Q5_K_M -> Q4_K_M -> Q3_K -> Q2_K. Each level:
   generate 512^2 at fixed steps/CFG, SSIM + PSNR + mean abs diff vs the
@@ -54,17 +61,25 @@ no fp8 / tq2 rungs.
    Requested 14230274048 bytes, 13270585344 bytes available` — runner
    has 15 GiB total, 14 GiB available; the BF16 DiT alone needs 14.23 GB.
    Fix: merge casts BF16->F16 (streaming, one tensor at a time) and the
-   reference + ladder converts use the ~7.1 GB F16 file. Run 3 = stage0
+   reference + ladder converts were to use the F16 file (then believed
+   to be ~7.1 GB — wrong, see run 3). Run 3 = stage0
    + chained ladder.
-2. `stage0` + chained `ladder` levels `q6_k,q5_k_m,q4_k_m`
-   (steps 20, cfg 6.0, `run_ladder=true`) — the plausible-stable range
-   first (run budget is now 2 runs left, not 4; chaining saves a run).
-3. `ladder` levels `q3_k,q2_k,q8_0` (steps 20, cfg 6.0, ref from the
-   stage0 artifact) — Q3/Q2 first, Q8_0 last (likely timeout, as in FLUX).
-   Speed stage only if a run remains after stage 1 (OPEN unless a ladder
-   run is skipped).
-4. (no 4th run remains in the plan — runs 1+2 were spent on the merge
-   and RAM failures; see 2–3).
+   Run 3 (45958588714, 10m36s): merge streamed fine (297 tensors F16 in
+   157s) — but the merged F16 file is 14,230,284,288 bytes, i.e. the
+   SAME size as BF16 (both are 2 bytes/element; the "halves memory"
+   assumption was wrong), and generation failed identically in 16.4s:
+   `[E] RAM weight capacity exceeded. Requested 14230274048 bytes,
+   12774645760 bytes available`. Stage 0 is impossible on this runner.
+   Fix for run 4: new `q8ref` stage — convert F16 -> Q8_0 GGUF with
+   `sd-cli -M convert` (streaming, ~2.6 GB RAM) and use THAT as the
+   reference, Q6_K fallback; ladder rungs convert once from F16.
+2. `q8ref` + chained `ladder` levels `q6_k,q5_k_m,q4_k_m,q3_k,q2_k`
+   (steps 20, cfg 6.0, `run_ladder=true`) — LAST run (4 of 4). The
+   budget guard (6000s) cuts the tail if the Q8_0 reference generation
+   is slow (FLUX data: Q8_0 ~3x slower than Q6_K on CPU); expected
+   yield: reference + Q6/Q5/Q4, Q3/Q2 as time allows.
+3. No runs remain after run 4. Speed stage: OPEN (no run left).
+   Q2_K: OPEN if the budget guard cuts it.
 
 Ladder/speed runs fetch the stage-0 reference from the
 `qwen21-ladder-stage0` artifact via the GitHub API (no repo bloat, no run
