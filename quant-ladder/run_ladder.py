@@ -46,15 +46,17 @@ JOB_BUDGET_S = 6000  # stop starting new levels after this (leave time to upload
 
 # Level -> convert types to try in order (first success wins; a level whose
 # types all fail is recorded as skipped, never fatal). _m variants are the
-# llama-style mixed quants; plain K is the uniform fallback.
+# llama-style mixed quants; plain K is the uniform fallback. Both cases are
+# tried because the help lists q2_K/q3_K/q4_K (capital K) while prior jobs
+# used lowercase; failed parses exit in seconds, so the fallback is cheap.
 LEVEL_TYPES = {
     "fp8": ["f8_e4m3"],
     "q8_0": ["q8_0"],
-    "q6_k": ["q6_k"],
-    "q5_k_m": ["q5_k_m", "q5_k"],
-    "q4_k_m": ["q4_k_m", "q4_k"],
-    "q3_k": ["q3_k"],
-    "q2_k": ["q2_k"],
+    "q6_k": ["q6_k", "q6_K"],
+    "q5_k_m": ["q5_k_m", "q5_K_M", "q5_k", "q5_K"],
+    "q4_k_m": ["q4_k_m", "q4_K_M", "q4_k", "q4_K"],
+    "q3_k": ["q3_k", "q3_K"],
+    "q2_k": ["q2_k", "q2_K"],
     "tq2": ["tq2_0"],
 }
 
