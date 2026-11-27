@@ -1,0 +1,220 @@
+name: FLUX 3 Klein Bonsai round 3 (ternary from base, own TQ2G128 writer)
+
+# Round 3: ternary DIRECTLY from the base BF16 weights (never from a
+# quantized intermediate), group 128 (PrismML's size; group 256 already
+# proven dead), packed by our own writer into the vendor TQ2G128 format
+# (sd.cpp GGML type 35, 68-byte blocks) -- never through sd-cli's TQ2
+# converter. Same prompt/seed/steps/CFG as the Q4 control in every run.
+#
+# Run 1 (this workflow): MSE-g128 + AMAX-g128, each as type-35 GGUF
+# (own writer, verified rel-L2 = 0) and as F16 GGUF (weights-vs-container
+# isolation), plus the Q4_K_M control, plus a diagnostic of what the
+# runner's sd-cli --type tq2_0 actually produces.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bonsai3-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          date +%s > job-start.txt
+          df -h .; nproc; free -h; lscpu | head -5
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          # torch comes from the CPU index; the rest must come from PyPI
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet safetensors numpy "huggingface_hub[cli]"
+          python -c "import torch; print('torch', torch.__version__)"
+
+      - name: Build stable-diffusion.cpp (CPU)
+        run: |
+          git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp
+          cmake -S sd.cpp -B sd.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF
+          cmake --build sd.cpp/build --config Release --target sd-cli -j4
+          ls -la sd.cpp/build/bin/
+          test -x sd.cpp/build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+          sd.cpp/build/bin/sd-cli --help > sd-cli-help.txt 2>&1 || true
+          grep -iE "cache-mode|llm_vision|offload|threads|seed" sd-cli-help.txt || true
+          du -sh sd.cpp; df -h .
+
+      - name: Download models
+        run: |
+          mkdir -p models results
+          hf download ml-resources/flux-3-image-klein-comfy diffusion_models/flux3-image-klein-bf16.safetensors --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3VL-4B-Instruct-Q4_K_M.gguf --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --local-dir models
+          hf download ml-resources/flux-3-image-klein-comfy vae/flux2-vae.safetensors --local-dir models
+          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --local-dir models || echo "Q4 download failed (comparison will be skipped)"
+          find models -type f | sort
+          du -sh models; df -h .
+
+      - name: Ternarize group-128 MSE + AMAX (directly from base BF16)
+        run: |
+          set +e
+          time timeout 1500 python bonsai3/ternarize.py --input models/diffusion_models/flux3-image-klein-bf16.safetensors --output models/flux3-image-klein-ternary-g128-mse.safetensors --scale-rule mse --group 128 --stats-out results/ternarize-g128-mse-stats.json
+          echo "ternarize-mse exit=$?"
+          time timeout 1500 python bonsai3/ternarize.py --input models/diffusion_models/flux3-image-klein-bf16.safetensors --output models/flux3-image-klein-ternary-g128-amax.safetensors --scale-rule amax --group 128 --stats-out results/ternarize-g128-amax-stats.json
+          echo "ternarize-amax exit=$?"
+          ls -la models/; df -h .
+
+      - name: Convert to F16 GGUFs (sd-cli; fusion only, no quantization)
+        run: |
+          set +e
+          SDCLI=sd.cpp/build/bin/sd-cli
+          time timeout 900 $SDCLI -M convert --diffusion-model models/diffusion_models/flux3-image-klein-bf16.safetensors --type f16 -o models/flux3-klein-bf16-f16.gguf
+          echo "convert base->f16 exit=$?"
+          time timeout 900 $SDCLI -M convert --diffusion-model models/flux3-image-klein-ternary-g128-mse.safetensors --type f16 -o models/flux3-klein-ternary-g128-mse-f16.gguf
+          echo "convert mse->f16 exit=$?"
+          time timeout 900 $SDCLI -M convert --diffusion-model models/flux3-image-klein-ternary-g128-amax.safetensors --type f16 -o models/flux3-klein-ternary-g128-amax-f16.gguf
+          echo "convert amax->f16 exit=$?"
+          ls -la models/; df -h .
+
+      - name: Pack with own TQ2G128 writer (type 35) + verify
+        run: |
+          set +e
+          time timeout 1200 python bonsai3/pack_gguf.py --input models/flux3-klein-ternary-g128-mse-f16.gguf --output models/flux3-klein-ternary-g128-mse-t35.gguf --targets bonsai3/tokforge-layout.json --stats-out results/pack-g128-mse-stats.json
+          echo "pack-mse exit=$?"
+          time timeout 1200 python bonsai3/pack_gguf.py --input models/flux3-klein-ternary-g128-amax-f16.gguf --output models/flux3-klein-ternary-g128-amax-t35.gguf --targets bonsai3/tokforge-layout.json --stats-out results/pack-g128-amax-stats.json
+          echo "pack-amax exit=$?"
+          ls -la models/; df -h .
+
+      - name: Diagnostic - what does sd-cli --type tq2_0 produce?
+        run: |
+          set +e
+          SDCLI=sd.cpp/build/bin/sd-cli
+          time timeout 900 $SDCLI -M convert --diffusion-model models/flux3-klein-ternary-g128-mse-f16.gguf --type tq2_0 -o models/flux3-klein-ternary-g128-mse-sdcli-tq2.gguf
+          echo "sd-cli tq2 convert exit=$?"
+          ls -la models/*tq2* 2>/dev/null || echo "no sd-cli tq2 file"
+          if [ -f models/flux3-klein-ternary-g128-mse-sdcli-tq2.gguf ]; then
+            python bonsai3/verify_gguf.py --gguf models/flux3-klein-ternary-g128-mse-sdcli-tq2.gguf --ref models/flux3-klein-ternary-g128-mse-f16.gguf --targets bonsai3/tokforge-layout.json --out results/verify-sdcli-tq2.json | tee results/verify-sdcli-tq2.log
+            echo "verify-sdcli-tq2 exit=$?"
+          fi
+          # free the big intermediates before inference (keep the GGUFs)
+          rm -f models/diffusion_models/flux3-image-klein-bf16.safetensors models/flux3-image-klein-ternary-g128-mse.safetensors models/flux3-image-klein-ternary-g128-amax.safetensors models/flux3-klein-bf16-f16.gguf
+          df -h .
+
+      - name: Generate Q4_K_M control (same prompt/seed/steps/CFG)
+        if: always()
+        run: |
+          G=models/diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf
+          if [ ! -f "$G" ]; then echo "Q4 file missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 1200 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/q4-512.png -v > results/sdcpp-q4.log 2>&1
+          echo "q4 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-q4.time
+          ls -la results/
+
+      - name: Generate type-35 MSE g128 (main attempt)
+        if: always()
+        run: |
+          G=models/flux3-klein-ternary-g128-mse-t35.gguf
+          if [ ! -f "$G" ]; then echo "type-35 MSE missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 2400 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/bonsai3-mse-t35-512.png -v > results/sdcpp-mse-t35.log 2>&1
+          echo "mse-t35 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-mse-t35.time
+          ls -la results/
+
+      - name: Generate F16 MSE g128 ternary (weights-vs-container isolation)
+        if: always()
+        run: |
+          G=models/flux3-klein-ternary-g128-mse-f16.gguf
+          if [ ! -f "$G" ]; then echo "F16 MSE missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 3300 ]; then echo "out of time (${ELAPSED}s), skipping F16 (needs ~30 min)"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 3600 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/bonsai3-mse-f16-512.png -v > results/sdcpp-mse-f16.log 2>&1
+          echo "mse-f16 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-mse-f16.time
+          ls -la results/
+
+      - name: Generate type-35 AMAX g128 (vendor recipe)
+        if: always()
+        run: |
+          G=models/flux3-klein-ternary-g128-amax-t35.gguf
+          if [ ! -f "$G" ]; then echo "type-35 AMAX missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 2400 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/bonsai3-amax-t35-512.png -v > results/sdcpp-amax-t35.log 2>&1
+          echo "amax-t35 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-amax-t35.time
+          ls -la results/
+
+      - name: Generate F16 AMAX g128 ternary (isolation, if time)
+        if: always()
+        run: |
+          G=models/flux3-klein-ternary-g128-amax-f16.gguf
+          if [ ! -f "$G" ]; then echo "F16 AMAX missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 3300 ]; then echo "out of time (${ELAPSED}s), skipping F16 (needs ~30 min)"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 3600 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/bonsai3-amax-f16-512.png -v > results/sdcpp-amax-f16.log 2>&1
+          echo "amax-f16 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-amax-f16.time
+          ls -la results/
+
+      - name: Summarize results
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, glob
+          res = {"images": {}, "times": {}, "stats_files": []}
+          for png in sorted(glob.glob("results/*.png")):
+              res["images"][os.path.basename(png)] = os.path.getsize(png)
+          for t in sorted(glob.glob("results/*.time")):
+              res["times"][os.path.basename(t)] = open(t).read().strip()
+          for s in sorted(glob.glob("results/*stats.json")) + sorted(glob.glob("results/verify-*.json")):
+              res["stats_files"].append(os.path.basename(s))
+          with open("results/results.json", "w") as fp:
+              json.dump(res, fp, indent=2)
+          print(json.dumps(res, indent=2))
+          EOF
+          ls -la results/
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux3-klein-bonsai3
+          path: results/
