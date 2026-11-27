@@ -29,6 +29,10 @@ on:
         description: 'winning level to optimize (speed stage)'
         required: false
         default: 'q4_k_m'
+      probes:
+        description: 'comma-separated speed probes (speed stage): base,s12,s8,nocache,t2,convdirect'
+        required: false
+        default: 'base,s12,s8,nocache,t2,convdirect'
       run_speed:
         description: 'run the speed stage after the ladder stage in the same job'
         required: false
@@ -95,9 +99,9 @@ jobs:
           [ "${{ inputs.run_speed }}" = "true" ] && SPEED_FLAG="--run-speed" || true
           REF=""
           [ -f ref/base-16.png ] && REF="--ref ref/base-16.png" || true
-          echo "stage=${{ inputs.stage }} levels=${{ inputs.levels }} steps=${{ inputs.steps }} cfg=${{ inputs.cfg }} winner=${{ inputs.winner }} $SPEED_FLAG $REF"
+          echo "stage=${{ inputs.stage }} levels=${{ inputs.levels }} steps=${{ inputs.steps }} cfg=${{ inputs.cfg }} winner=${{ inputs.winner }} probes=${{ inputs.probes }} $SPEED_FLAG $REF"
           set +e
-          time python quant-ladder/run_ladder.py --stage "${{ inputs.stage }}" --levels "${{ inputs.levels }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --stage0-steps "${{ inputs.stage0_steps }}" --winner "${{ inputs.winner }}" $SPEED_FLAG $REF --out results
+          time python quant-ladder/run_ladder.py --stage "${{ inputs.stage }}" --levels "${{ inputs.levels }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --stage0-steps "${{ inputs.stage0_steps }}" --winner "${{ inputs.winner }}" --probes "${{ inputs.probes }}" $SPEED_FLAG $REF --out results
           echo "driver exit=$?"
           ls -la results/
 

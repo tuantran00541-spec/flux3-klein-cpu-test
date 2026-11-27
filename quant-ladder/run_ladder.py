@@ -170,7 +170,7 @@ def convert_level(bf16_path, level, out_dir):
 
 
 def generate(model_path, out_png, steps, cfg, threads, timeout_s, easycache=True,
-             log_path=None):
+             log_path=None, extra_flags=None):
     """One sd-cli txt2img run. Returns (status, wall_seconds, error)."""
     cmd = [SDCPP_BIN,
            "--diffusion-model", model_path,
@@ -187,6 +187,8 @@ def generate(model_path, out_png, steps, cfg, threads, timeout_s, easycache=True
         cmd.append("--offload-to-cpu")
     if easycache and "--cache-mode" in SDCLI_HELP:
         cmd += ["--cache-mode", "easycache"]
+    if extra_flags:
+        cmd += list(extra_flags)
     log("generate %s (steps=%s cfg=%s threads=%s easycache=%s timeout=%ss)"
         % (os.path.basename(out_png), steps, cfg, threads, easycache, timeout_s))
     t0 = time.time()
@@ -315,6 +317,19 @@ def stage_ladder(args, results):
             log("could not delete %s: %s" % (gguf, e))
 
 
+# Speed probes: name -> (steps or None=ladder steps, cfg or None=ladder cfg,
+# threads, easycache, extra sd-cli flags). Order matters: the most important
+# probes first, so a cut-short job still has the key data.
+SPEED_PROBES = {
+    "base": (None, None, 4, True, []),
+    "s12": (12, None, 4, True, []),
+    "s8": (8, None, 4, True, []),
+    "nocache": (None, None, 4, False, []),
+    "t2": (None, None, 2, True, []),
+    "convdirect": (None, None, 4, True, ["--conv-direct", "on"]),
+}
+
+
 def stage_speed(args, results):
     """Optimize the winning level: threads, steps, EasyCache, one at a time."""
     models = download_models()
@@ -324,7 +339,7 @@ def stage_speed(args, results):
     winner = args.winner
     if winner not in LEVEL_TYPES:
         raise SystemExit("ERROR: unknown winner level %s" % winner)
-    log("speed stage on winner: %s" % winner)
+    log("speed stage on winner: %s probes=%s" % (winner, args.probes))
     gguf, typ_or_err = convert_level(models["base"], winner, args.out)
     if gguf is None:
         results["speed"].append({"name": "speed-%s" % winner, "level": winner,
@@ -332,14 +347,17 @@ def stage_speed(args, results):
                                  "error": "convert failed: " + typ_or_err})
         save(results, args)
         return
-    probes = [
-        ("base", args.steps, args.cfg, 4, True),
-        ("t2", args.steps, args.cfg, 2, True),
-        ("nocache", args.steps, args.cfg, 4, False),
-    ]
-    if args.steps > 12:
-        probes.append(("s12", 12, args.cfg, 4, True))
-    for pname, steps, cfg, threads, easycache in probes:
+    for pname in args.probes:
+        if pname not in SPEED_PROBES:
+            results["speed"].append({"name": "speed-%s-%s" % (winner, pname),
+                                     "level": winner, "status": "skipped",
+                                     "wall_seconds": 0,
+                                     "error": "unknown probe %s" % pname})
+            save(results, args)
+            continue
+        psteps, pcfg, threads, easycache, extra = SPEED_PROBES[pname]
+        steps = args.steps if psteps is None else psteps
+        cfg = args.cfg if pcfg is None else pcfg
         if elapsed() > JOB_BUDGET_S:
             results["speed"].append({"name": "speed-%s-%s" % (winner, pname),
                                      "level": winner, "status": "skipped",
@@ -349,11 +367,13 @@ def stage_speed(args, results):
             continue
         rec = {"name": "speed-%s-%s" % (winner, pname), "level": winner,
                "quant_type_used": typ_or_err, "steps": steps, "cfg": cfg,
-               "threads": threads, "easycache": easycache}
+               "threads": threads, "easycache": easycache,
+               "extra_flags": extra}
         out_png = os.path.join(args.out, "speed-%s-%s.png" % (winner, pname))
         st, wall, err = generate(gguf, out_png, steps, cfg, threads, 1800,
                                  easycache=easycache,
-                                 log_path=os.path.join(args.out, "sdcpp-speed-%s-%s.log" % (winner, pname)))
+                                 log_path=os.path.join(args.out, "sdcpp-speed-%s-%s.log" % (winner, pname)),
+                                 extra_flags=extra)
         rec.update({"status": st, "wall_seconds": wall, "error": err,
                     "outputs": [{"file": os.path.basename(out_png),
                                  "bytes": os.path.getsize(out_png)}]
@@ -394,6 +414,8 @@ def main():
                     help="steps for the true base reference")
     ap.add_argument("--winner", default="q4_k_m",
                     help="winning level to optimize (speed stage)")
+    ap.add_argument("--probes", default="base,s12,s8,nocache,t2,convdirect",
+                    help="comma-separated speed probes (speed stage)")
     ap.add_argument("--run-speed", action="store_true",
                     help="run the speed stage after the ladder stage (one job)")
     ap.add_argument("--ref", default="",
@@ -401,6 +423,7 @@ def main():
     ap.add_argument("--out", default="results")
     args = ap.parse_args()
     args.levels = [l.strip() for l in args.levels.split(",") if l.strip()]
+    args.probes = [p.strip() for p in args.probes.split(",") if p.strip()]
     os.makedirs(args.out, exist_ok=True)
     if not os.path.exists(SDCPP_BIN):
         print("ERROR sd-cli binary missing at %s" % SDCPP_BIN)
@@ -409,6 +432,7 @@ def main():
     results = {"stage": args.stage, "levels": args.levels,
                "steps": args.steps, "cfg": args.cfg,
                "stage0_steps": args.stage0_steps, "seed": SEED,
+               "winner": args.winner, "probes": args.probes,
                "prompt": T2I_PROMPT,
                "base_checkpoint": BASE_REPO + " " + BASE_FILE,
                "text_encoder": TE_REPO + " " + TE_FILE + " + " + TE_VISION,
