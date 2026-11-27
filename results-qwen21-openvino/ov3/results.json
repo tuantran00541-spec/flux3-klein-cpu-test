@@ -1,0 +1,84 @@
+{
+  "path": "res384",
+  "steps": 20,
+  "cfg": 6.0,
+  "seed": 42,
+  "prompt": "A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.",
+  "reference": "ref/base-20.png",
+  "reference_note": "Q6_K 20-step ref (base-20.png); the 14.23 GB BF16/F16 cannot load on the 15 GiB runner",
+  "license": "Qwen-Image-2.1 is under the Qwen Research License (research/evaluation only)",
+  "tests": [
+    {
+      "name": "q4-easycache",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "level": "q4_k_m",
+      "quant_type_used": "q4_K",
+      "status": "success",
+      "wall_seconds": 820.3,
+      "error": null,
+      "outputs": [
+        {
+          "file": "q4-easycache.png",
+          "bytes": 607140
+        }
+      ],
+      "ssim_vs_ref": 0.6782,
+      "psnr_vs_ref_db": 13.59,
+      "mean_abs_diff": 25.94
+    },
+    {
+      "name": "res384-lanczos",
+      "level": "q6_k",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "extra_flags": [],
+      "status": "success",
+      "wall_seconds": 940.6,
+      "error": null,
+      "gen_resolution": "384x384->512 lanczos",
+      "outputs": [
+        {
+          "file": "res384-lanczos.png",
+          "bytes": 379134
+        }
+      ],
+      "ssim_vs_ref": 0.2385,
+      "psnr_vs_ref_db": 7.24,
+      "mean_abs_diff": 79.43
+    },
+    {
+      "name": "res384-lanczos-easycache",
+      "level": "q6_k",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "status": "success",
+      "wall_seconds": 563.5,
+      "error": null,
+      "gen_resolution": "384x384->512 lanczos",
+      "outputs": [
+        {
+          "file": "res384-lanczos-easycache.png",
+          "bytes": 383599
+        }
+      ],
+      "ssim_vs_ref": 0.2436,
+      "psnr_vs_ref_db": 7.4,
+      "mean_abs_diff": 78.06
+    }
+  ],
+  "speed": [],
+  "elapsed_seconds": 3307.9
+}

@@ -1,0 +1,80 @@
+{
+  "path": "viggle",
+  "steps": 20,
+  "cfg": 6.0,
+  "seed": 42,
+  "prompt": "A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.",
+  "reference": "ref/base-20.png",
+  "reference_note": "Q6_K 20-step ref (base-20.png); the 14.23 GB BF16/F16 cannot load on the 15 GiB runner",
+  "license": "Qwen-Image-2.1 is under the Qwen Research License (research/evaluation only)",
+  "tests": [
+    {
+      "name": "viggle-base",
+      "steps": 6,
+      "cfg": 1.0,
+      "threads": 4,
+      "extra_flags": [],
+      "sigmas": "1.000000,0.962557,0.923057,0.837170,0.631512,0.363570,0.0",
+      "dit": "Abiray/Qwen-Image-2.1-viggle-turbo-v0.3-6step-GGUF qwen_image_2.1_turbo_v0.3_Q6_K.gguf",
+      "status": "success",
+      "wall_seconds": 167.5,
+      "error": null,
+      "outputs": [
+        {
+          "file": "viggle-base.png",
+          "bytes": 667705
+        }
+      ],
+      "ssim_vs_ref": 0.4371,
+      "psnr_vs_ref_db": 9.46,
+      "mean_abs_diff": 58.77
+    },
+    {
+      "name": "viggle-easycache",
+      "steps": 6,
+      "cfg": 1.0,
+      "threads": 4,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "1.000000,0.962557,0.923057,0.837170,0.631512,0.363570,0.0",
+      "dit": "Abiray/Qwen-Image-2.1-viggle-turbo-v0.3-6step-GGUF qwen_image_2.1_turbo_v0.3_Q6_K.gguf",
+      "status": "success",
+      "wall_seconds": 152.6,
+      "error": null,
+      "outputs": [
+        {
+          "file": "viggle-easycache.png",
+          "bytes": 658428
+        }
+      ],
+      "ssim_vs_ref": 0.4537,
+      "psnr_vs_ref_db": 9.64,
+      "mean_abs_diff": 58.74
+    },
+    {
+      "name": "lightning-base",
+      "steps": 4,
+      "cfg": 1.0,
+      "threads": 4,
+      "extra_flags": [],
+      "sigmas": "1.0,0.857,0.667,0.400,0.0",
+      "dit": "darioooooo0o/Lightning-4step-Qwen-Image-2.1-GGUF qwen-image-2.1-lightning-4step-Q6_K.gguf",
+      "status": "success",
+      "wall_seconds": 187.7,
+      "error": null,
+      "outputs": [
+        {
+          "file": "lightning-base.png",
+          "bytes": 664217
+        }
+      ],
+      "ssim_vs_ref": 0.3771,
+      "psnr_vs_ref_db": 9.07,
+      "mean_abs_diff": 65.92
+    }
+  ],
+  "speed": [],
+  "elapsed_seconds": 608.6
+}
