@@ -74,12 +74,53 @@ no fp8 / tq2 rungs.
    `sd-cli -M convert` (streaming, ~2.6 GB RAM) and use THAT as the
    reference, Q6_K fallback; ladder rungs convert once from F16.
 2. `q8ref` + chained `ladder` levels `q6_k,q5_k_m,q4_k_m,q3_k,q2_k`
-   (steps 20, cfg 6.0, `run_ladder=true`) — LAST run (4 of 4). The
-   budget guard (6000s) cuts the tail if the Q8_0 reference generation
-   is slow (FLUX data: Q8_0 ~3x slower than Q6_K on CPU); expected
-   yield: reference + Q6/Q5/Q4, Q3/Q2 as time allows.
-3. No runs remain after run 4. Speed stage: OPEN (no run left).
-   Q2_K: OPEN if the budget guard cuts it.
+   (steps 20, cfg 6.0, `run_ladder=true`) — LAST run (4 of 4).
+   Run 4 (45960665797, 2h1m7s, conclusion cancelled = 120-min cap hit
+   after upload): convert F16 -> Q8_0 OK in 34s (7,591,558,304 B) but
+   Q8_0 generation TIMEOUT at 3600s; fallback Q6_K convert OK in 96s
+   (5,876,563,104 B), generation SUCCESS in 1233.5s — reference is Q6_K.
+   Ladder: Q5_K (converted as `q5_K`, 326s, 4,936,078,496 B) SUCCESS in
+   1192.9s, SSIM 0.7191 / PSNR 15.46 dB vs Q6_K; Q4/Q3/Q2 SKIPPED
+   ("out of time", 6686s elapsed — the Q8_0 timeout ate the budget).
+   See "Results" below. No runs remain.
+
+## Results (run 4, 2026-11-27; 512^2, 20 steps, CFG 6.0, euler, seed 42)
+
+| Level | Type used | Time | SSIM vs Q6_K ref | Eyeball |
+|---|---|---|---|---|
+| Q8_0 (ref candidate) | q8_0 | TIMEOUT 3600s | — | — |
+| **Q6_K (reference)** | q6_K | 1233.5s | — (ref) | PASS, clean swordsman |
+| Q5_K ("q5_k_m") | q5_K | 1192.9s | 0.7191 / 15.46 dB | PASS, clean — composition drifted, not degraded |
+| Q4_K_M | — | not run | — | OPEN |
+| Q3_K | — | not run | — | OPEN |
+| Q2_K | — | not run | — | OPEN |
+
+**Verdict by the pre-registered rule (eyeball PASS + SSIM >= 0.85):
+Q6_K is the most stable** — it is the only rung that meets both legs,
+because it IS the reference. Q5_K passes the eyeball (clean,
+on-prompt, no artifacts) but fails the SSIM leg (0.7191). The low
+SSIM is composition drift, not degradation: same prompt/seed, the
+Q5_K swordsman re-poses (body more frontal, katana on the other hip)
+while staying fully coherent. Qwen-Image-2.1's diffusion trajectory
+is far less stable under quantization than FLUX 3 Klein's (FLUX Q5_K
+vs BF16: SSIM 0.957) — so for Qwen, pixel metrics overstate quality
+loss and the eyeball is the deciding evidence. No claim is made about
+Q4/Q3/Q2 or about true-BF16 fidelity: the true BF16 base was never
+generated (14.23 GB cannot load on the 15 GiB runner), and Q4/Q3/Q2
+never ran (no runs left). Speed stage: OPEN (no run left).
+
+Notes: sd-cli `-M convert` accepts only the uppercase-K type names
+(`q6_K`, `q5_K`, `q4_K`, `q3_K`); the `_M`/lowercase variants
+(`q5_k_m`, `q5_K_M`, `q5_k`, `q6_k`) are rejected instantly — the
+same was true in the FLUX ladder (its "Q5_K_M" was actually `q5_K`),
+so the two ladders used identical types. Convert is cheap and
+streaming (Q8_0 34s, Q6_K 96s, Q5_K 326s, ~2.6 GB RAM); generation
+dominates (~20 min/image at Q6/Q5). Q8_0 generation is unusable on
+CPU (timeout, as in FLUX). The artifact `qwen21-ladder-q8ref`
+(5.84 GB, mostly the Q6_K GGUF) is on GitHub; local copies of the
+two PNGs + `results.json` (reconstructed verbatim from the job log —
+the 5.8 GB artifact download was cut short by the VM disk quota)
+are in `~/workspace/flux3-klein-cpu-test/results-qwen21-ladder/q8ref/`.
 
 Ladder/speed runs fetch the stage-0 reference from the
 `qwen21-ladder-stage0` artifact via the GitHub API (no repo bloat, no run
