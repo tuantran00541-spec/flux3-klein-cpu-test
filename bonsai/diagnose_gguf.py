@@ -172,25 +172,26 @@ def read_tensor_bytes(path, data_start, info, nbytes):
         return f.read(nbytes)
 
 
-def dequant_tq2(raw, nelem, variant):
+def dequant_tq2(raw, nelem):
     """Dequantize one TQ2_0 tensor's raw bytes -> float32 array.
-    Block = 66 bytes: fp16 scale + 64 qs bytes, 4x2-bit codes per byte.
-    variant 'lsb': value j in byte qs[j//4], bits (byte >> 2*(j%4)) & 3.
-    variant 'msb': bits (byte >> 2*(3 - j%4)) & 3. Stored code c -> t = c - 1."""
+    Block = 66 bytes: fp16 scale + 64 qs bytes. GGML layout
+    (dequantize_row_tq2_0 in ggml-quants.c): values are emitted as
+    for j in {0,32} byte-chunk, for l in 0..3, for m in 0..31:
+    code = (qs[j+m] >> 2*l) & 3. So the value at linear position p
+    lives in byte (p%32) + 32*(p//128), bits 2*((p//32)%4).
+    (An earlier version of this function assumed sequential packing
+    byte p//4 -- that is WRONG and produced rel L2 in the thousands.)"""
     nblocks = nelem // 256
-    assert nelem % 256 == 0, "TQ2 tensor with nelem %% 256 != 0"
+    assert nelem % 256 == 0, "TQ2 tensor with nelem % 256 != 0"
+    p = np.arange(256)
+    byte_idx = (p % 32) + 32 * (p // 128)
+    shift = 2 * ((p // 32) % 4)
     out = np.empty(nelem, dtype=np.float32)
     for b in range(nblocks):
         blk = raw[b * 66:(b + 1) * 66]
         scale = np.frombuffer(blk[0:2], dtype=np.float16)[0].astype(np.float32)
         qs = np.frombuffer(blk[2:66], dtype=np.uint8)
-        codes = np.empty(256, dtype=np.int8)
-        for j in range(256):
-            byte = int(qs[j // 4])
-            if variant == "lsb":
-                codes[j] = (byte >> (2 * (j % 4))) & 3
-            else:
-                codes[j] = (byte >> (2 * (3 - (j % 4)))) & 3
+        codes = (qs[byte_idx] >> shift) & 3
         out[b * 256:(b + 1) * 256] = scale * (codes.astype(np.float32) - 1.0)
     return out
 
@@ -334,24 +335,19 @@ def main():
                 ref = (amax * t).reshape(w.shape)
                 ref_kind = "amax-from-bf16"
             ref = ref.reshape(-1)
-            best = None
-            for variant in ("lsb", "msb"):
-                dq = dequant_tq2(raw, nelem, variant)
-                rel = float(np.linalg.norm(dq - ref) /
-                            max(np.linalg.norm(ref), 1e-12))
-                if best is None or rel < best["rel_l2"]:
-                    best = {"variant": variant, "rel_l2": rel,
-                            "max_abs_diff": float(np.max(np.abs(dq - ref))),
-                            "zero_frac_deq": float(np.mean(dq == 0)),
-                            "zero_frac_ref": float(np.mean(ref == 0))}
+            dq = dequant_tq2(raw, nelem)
+            rel = float(np.linalg.norm(dq - ref) /
+                        max(np.linalg.norm(ref), 1e-12))
+            best = {"variant": "ggml-interleaved", "rel_l2": rel,
+                    "max_abs_diff": float(np.max(np.abs(dq - ref))),
+                    "zero_frac_deq": float(np.mean(dq == 0)),
+                    "zero_frac_ref": float(np.mean(ref == 0))}
             fidelity[name] = dict(best, ref_kind=ref_kind,
                                   shape=list(infos[name][1]))
         report["tq2_fidelity_sample"] = fidelity
         rels = [v["rel_l2"] for v in fidelity.values()]
         print("TQ2 fidelity (n=%d): rel L2 min/med/max = %.4g / %.4g / %.4g"
               % (len(rels), min(rels), float(np.median(rels)), max(rels)))
-        print("variants that matched: %s"
-              % {v["variant"] for v in fidelity.values()})
 
     with open(args.out, "w") as f:
         json.dump(report, f, indent=2)

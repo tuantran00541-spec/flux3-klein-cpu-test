@@ -12,7 +12,7 @@ on:
           - mse
           - amax
       mode:
-        description: 'standard = original bonsai test (mse/amax TQ2 + Q4 control); diagnose = round-2 diagnostic ladder (gguf-dump + dequant analysis + ternary-F16 + Q3_K/Q2_K controls); fix1 = round-2 fix attempt (fixed fidelity analysis + Q2_K/Q3_K via llama-quantize + ternary-F16 with long timeout)'
+        description: 'standard = original bonsai test (mse/amax TQ2 + Q4 control); diagnose = round-2 diagnostic ladder (gguf-dump + dequant analysis + ternary-F16 + Q3_K/Q2_K controls); fix1 = round-2 fix attempt (fixed fidelity analysis + Q2_K/Q3_K via llama-quantize + ternary-F16 with long timeout); fix2 = round-2 fix attempt 2 (Python Q2_K reference quantizer + corrected TQ2 fidelity + group-128 ternary bonus)'
         required: false
         default: 'standard'
         type: choice
@@ -20,6 +20,7 @@ on:
           - standard
           - diagnose
           - fix1
+          - fix2
 
 jobs:
   bonsai-test:
@@ -496,4 +497,154 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: flux3-klein-bonsai-fix1
+          path: results/
+
+  # ---- Round-2 fix attempt 2 (mode == 'fix2') ----
+  # Fix1 proved: the ternary WEIGHTS are the problem (ternary-F16 is pure
+  # noise), sd-cli rejects q2_k/q3_k, llama-quantize cannot read sd.cpp
+  # GGUFs (tensor name 65 chars > 64-char limit). This run ports the
+  # reference Q2_K quantizer (ggml quantize_row_q2_K_ref +
+  # make_qkx2_quants) to vectorized numpy in bonsai/quantize_k.py and
+  # writes the Q2_K GGUF directly. Q2_K has per-16 sub-block scales --
+  # strictly finer than TQ2's single scale per 256-block (and PrismML's
+  # Bonsai uses group 128, not 256). Bonus, time-guarded: group-128
+  # ternary -> F16 generation (PrismML's group size).
+  fix2:
+    if: ${{ inputs.mode == 'fix2' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          date +%s > job-start.txt
+          df -h .; nproc; free -h; lscpu | head -25
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet safetensors numpy "huggingface_hub[cli]" gguf
+          python -c "import torch; print('torch', torch.__version__)"
+          python -c "import numpy; print('numpy', numpy.__version__)"
+
+      - name: Build stable-diffusion.cpp (CPU)
+        run: |
+          git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp
+          cmake -S sd.cpp -B sd.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF
+          cmake --build sd.cpp/build --config Release --target sd-cli -j4
+          test -x sd.cpp/build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+          sd.cpp/build/bin/sd-cli --help > sd-cli-help.txt 2>&1 || true
+          du -sh sd.cpp; df -h .
+
+      - name: Download models (BF16 + TE + VAE; no Q4 control needed)
+        run: |
+          mkdir -p models results
+          hf download ml-resources/flux-3-image-klein-comfy diffusion_models/flux3-image-klein-bf16.safetensors --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3VL-4B-Instruct-Q4_K_M.gguf --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --local-dir models
+          hf download ml-resources/flux-3-image-klein-comfy vae/flux2-vae.safetensors --local-dir models
+          find models -type f | sort
+          du -sh models; df -h .
+
+      - name: Ternarize group-128 (bonus material; PrismML's group size)
+        run: |
+          set +e
+          time timeout 1800 python bonsai/ternarize.py --input models/diffusion_models/flux3-image-klein-bf16.safetensors --output models/flux3-image-klein-ternary-g128.safetensors --scale-rule mse --group 128 --stats-out results/ternarize-g128-stats.json
+          echo "ternarize-g128 exit=$?"
+          ls -la models/
+          if [ ! -f results/ternarize-g128-stats.json ]; then rm -f models/flux3-image-klein-ternary-g128.safetensors; echo "no stats JSON -> ternary-g128 file discarded"; fi
+
+      - name: Convert with sd-cli (F16 input for quantize_k + TQ2 for corrected fidelity + ternary-g128-F16)
+        run: |
+          set +e
+          SDCLI=sd.cpp/build/bin/sd-cli
+          BF16=models/diffusion_models/flux3-image-klein-bf16.safetensors
+          TERN128=models/flux3-image-klein-ternary-g128.safetensors
+          RULES="modulations=f16,emb_in=f16"
+          time timeout 900 $SDCLI -M convert --diffusion-model "$BF16" --type f16 -o models/flux3-klein-bf16-f16.gguf
+          echo "convert bf16->f16 exit=$?"
+          time timeout 900 $SDCLI -M convert --diffusion-model "$BF16" --type tq2_0 --tensor-type-rules "$RULES" -o models/flux3-klein-tq2-amax.gguf
+          echo "convert bf16->tq2 exit=$?"
+          if [ -f "$TERN128" ]; then
+            time timeout 900 $SDCLI -M convert --diffusion-model "$TERN128" --type f16 -o models/flux3-klein-ternary-g128-f16.gguf
+            echo "convert ternary-g128->f16 exit=$?"
+          else
+            echo "no ternary-g128 file, skipping its convert"
+          fi
+          ls -la models/
+
+      - name: Corrected TQ2 fidelity (closes the round-1 anomaly)
+        run: |
+          set +e
+          DUMP="gguf-dump"
+          command -v gguf-dump >/dev/null 2>&1 || DUMP="python -m gguf.scripts.gguf_dump"
+          G=models/flux3-klein-tq2-amax.gguf
+          if [ -f "$G" ]; then
+            $DUMP "$G" > results/dump-tq2-amax.txt 2>&1 || echo "dump failed"
+            python bonsai/diagnose_gguf.py --gguf "$G" --dump results/dump-tq2-amax.txt --bf16 models/diffusion_models/flux3-image-klein-bf16.safetensors --out results/diagnose-tq2-amax.json | tee results/diagnose-tq2-amax.log
+            echo "expectation: rel L2 ~0 (converter preserves ternary values exactly); the round-1 thousands were my dequant-layout bug"
+          else
+            echo "TQ2 file missing, skipping fidelity"
+          fi
+          ls -la results/
+
+      - name: Quantize to Q2_K with bonsai/quantize_k.py (reference port)
+        run: |
+          set +e
+          if [ ! -f models/flux3-klein-bf16-f16.gguf ]; then echo "BF16-F16 missing, cannot quantize"; exit 1; fi
+          time timeout 3600 python bonsai/quantize_k.py --input models/flux3-klein-bf16-f16.gguf --output models/flux3-klein-q2k.gguf --stats-out results/quantize-q2k-stats.json
+          echo "quantize-k exit=$?"
+          ls -la models/
+          DUMP="gguf-dump"
+          command -v gguf-dump >/dev/null 2>&1 || DUMP="python -m gguf.scripts.gguf_dump"
+          G=models/flux3-klein-q2k.gguf
+          if [ -f "$G" ]; then
+            $DUMP "$G" > results/dump-q2k.txt 2>&1 || echo "dump q2k failed"
+            python bonsai/diagnose_gguf.py --gguf "$G" --dump results/dump-q2k.txt --bf16 models/diffusion_models/flux3-image-klein-bf16.safetensors --out results/diagnose-q2k.json | tee results/diagnose-q2k.log
+            echo "expectation: 258 Q2_K + 93 BF16 + 8 F16, validate rel L2 median ~0.30"
+          fi
+          ls -la results/
+
+      - name: Generate Q2_K (the fix candidate)
+        if: always()
+        run: |
+          G=models/flux3-klein-q2k.gguf
+          if [ ! -f "$G" ]; then echo "Q2_K missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          START=$(date +%s)
+          set +e
+          timeout 2400 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/q2k-512.png -v > results/sdcpp-q2k.log 2>&1
+          echo "q2k exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-q2k.time
+          ls -la results/
+
+      - name: Generate group-128 ternary-F16 (bonus, only if time remains)
+        if: always()
+        run: |
+          G=models/flux3-klein-ternary-g128-f16.gguf
+          if [ ! -f "$G" ]; then echo "ternary-g128-F16 missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping bonus"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          START=$(date +%s)
+          set +e
+          timeout 2400 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE --output results/ternary-g128-f16-512.png -v > results/sdcpp-ternary-g128-f16.log 2>&1
+          echo "ternary-g128-f16 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-ternary-g128-f16.time
+          ls -la results/
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux3-klein-bonsai-fix2
           path: results/
