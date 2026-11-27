@@ -67,3 +67,49 @@ GitHub runner host CPUs vary that much.
   `convert_source` input (`mse` | `amax`).
 - `../results-bonsai/` — run 45858864209 artifact (MSE).
 - `../results-bonsai-amax/` — run 45865137246 artifact (amax).
+
+## Round-2 diagnose (run 45910651118, 2026-11-27, $0, ~77 min, success)
+
+Diagnostic ladder, one run (`mode=diagnose`):
+
+**Step 1 — gguf-dump: CONVERTER EXONERATED.** Both TQ2 files:
+TQ2_0 exactly 258 tensors (the targets), BF16 93, F16 8. All 96
+sensitive tensors unquantized; the 8 F16 are the modulations matched by
+`modulations=f16` (early/single_stream_modulations lin.weight), the rest
+of the exceptions stayed BF16 by converter default. The
+tensor-type-rules did NOT misapply — suspect (c) from round 1 is DEAD.
+(Caveat: the value-identity check and the TQ2 dequant-vs-reference
+fidelity never ran — `diagnose_gguf.py` crashed with KeyError because
+GGUF names carry the `model.diffusion_model.` prefix and the safetensors
+reference does not. Fixed in `bonsai/diagnose_gguf.py` — `ref_name()`
+strips the prefix; dequant layout verified locally on synthetic data.)
+
+**Step 2 — ternary weights via F16: UNANSWERED (timeout).** Both F16
+generations hit the 1500s client timeout (exit 124). But the BF16-F16
+control PROVED the F16 path works: sampling completed in 1472.49s
+(EasyCache skipped 5/16 steps) and was killed only during VAE decode /
+save. The ternary-F16 run never reached sampling completion — ternary
+activations likely defeat EasyCache (0/16 skips, as in round 1's TQ2),
+so it needs ~2100s+. Retried in `fix1` with a 3600s timeout.
+
+**Step 3 — Q3_K / Q2_K controls: BLOCKED at the converter.**
+`sd-cli -M convert --type q3_k` / `q2_k` both fail immediately:
+`[E] error: invalid weight format q3_k` — the converter only accepts
+f32/f16/bf16/q8_0/q4_*/q5_*/q6_*/tq1_0/tq2_0-style types, not K-quants
+below Q4. No Q3_K/Q2_K files were produced. Retried in `fix1` via the
+reference `llama-quantize` binary (built on the runner).
+
+**Step 4 — PrismML ground truth (local, no run):**
+`quantization_config.json` from
+`prism-ml/bonsai-image-ternary-4B-gemlite-2bit` confirms format
+`gemlite-int2-ternary-g128`, **group_size 128 (not 256)**, skip list =
+proj_out / x_embedder / context_embedder / time_text_embed /
+time_guidance_embed / norm_out / 3 modulation streams (matches round 1's
+exceptions). The scale-fitting algorithm is still undisclosed
+(`"solver": "ternary"`). The packed `state_dict.pt` (1.54 GB) is a zip
+of opaque `data/N` blobs; a 2 MB range-sample of a packed-weight blob
+does NOT parse as plain 4x2-bit (t+1) codes (code 3 = 33.8% — impossible
+for ternary), so the Gemlite packing is bit-planed/swizzled for GPU
+tensor cores and no clean zero fraction or scale recipe can be read
+from raw bytes without the format spec. Local full download was
+abandoned (disk quota) — analysis moved to the runner in `fix1`.

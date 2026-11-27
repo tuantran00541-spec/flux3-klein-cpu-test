@@ -160,6 +160,12 @@ def parse_dump_types(dump_path):
     return types
 
 
+def ref_name(name):
+    """GGUF tensors carry the 'model.diffusion_model.' prefix; the
+    safetensors source does not. Strip it for reference lookups."""
+    return name.removeprefix("model.diffusion_model.")
+
+
 def read_tensor_bytes(path, data_start, info, nbytes):
     with open(path, "rb") as f:
         f.seek(data_start + info[2])
@@ -282,14 +288,15 @@ def main():
     # Exception values: F16/BF16 tensors must equal the BF16 source.
     exc_check = {}
     for name, tname in sensitive.items():
-        if name not in infos or name not in bf16_header:
+        rn = ref_name(name)
+        if name not in infos or rn not in bf16_header:
             continue
         if tname in ("F16", "BF16"):
             nelem, nbytes = tensor_nbytes(name, tname)
             raw = read_tensor_bytes(args.gguf, data_start, infos[name], nbytes)
             got = np.frombuffer(raw, dtype=np.float16).astype(np.float32) \
                 if tname == "F16" else bf16_to_f32(raw)
-            ref = read_st_tensor(args.bf16, bf16_header, bf16_hlen, name)
+            ref = read_st_tensor(args.bf16, bf16_header, bf16_hlen, rn)
             exc_check[name] = {
                 "type": tname,
                 "max_abs_diff": float(np.max(np.abs(got.reshape(ref.shape) - ref))),
@@ -314,11 +321,12 @@ def main():
             tname = dump_types[name]
             nelem, nbytes = tensor_nbytes(name, tname)
             raw = read_tensor_bytes(args.gguf, data_start, infos[name], nbytes)
-            if tern_header is not None and name in tern_header:
-                ref = read_st_tensor(args.ternary, tern_header, tern_hlen, name)
+            rn = ref_name(name)
+            if tern_header is not None and rn in tern_header:
+                ref = read_st_tensor(args.ternary, tern_header, tern_hlen, rn)
                 ref_kind = "ternary-file"
             else:
-                w = read_st_tensor(args.bf16, bf16_header, bf16_hlen, name)
+                w = read_st_tensor(args.bf16, bf16_header, bf16_hlen, rn)
                 wb = w.reshape(-1, 256)
                 amax = np.abs(wb).max(axis=-1, keepdims=True)
                 amax = np.where(amax > 0, amax, 1.0)
