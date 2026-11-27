@@ -58,7 +58,7 @@ Q3_K_M (secondary vendor — OPEN if budget remains).
 
 | # | Group | Probes (in order) | Status |
 |---|---|---|---|
-| D1 | own Q4 | own-q4-base, own-q4-stacked, q6-stacked-control | pending |
+| D1 | own Q4 | own-q4-base, own-q4-stacked, q6-stacked-control | ✅ done — run 46076596744, success, 3/3 probes (see Results) |
 | D2 | own Q3 | own-q3-base, own-q3-stacked, q6-stacked-control | pending |
 | D3 | own Q2 | own-q2-base, own-q2-stacked, q6-stacked-control | pending |
 | D4 | unsloth base | unsloth-q4-base, unsloth-q4-stacked, unsloth-q3xl-base, unsloth-q3xl-stacked | pending |
@@ -72,15 +72,23 @@ Driver enforces the 6000 s job budget and records skipped probes.
 
 ## Results (fill in per group)
 
+### D1 — own Q4 (run 46076596744, success, 3/3, elapsed 2856.5s; dispatched 22:25 UTC, completed ~23:24 UTC)
+
+| Probe | Steps/CFG | Wall | SSIM | PSNR | Eye verdict |
+|---|---|---|---|---|---|
+| own-q4-base | 20/6.0 | 1155.6s | 0.6774 | 13.39 | clean, composition preserved (face/profile slightly different; SSIM understates similarity) |
+| own-q4-stacked | 12/6.0 + EasyCache | 527.9s | 0.5709 | 11.59 | clean, composition preserved, darker/muted (s12 tonal cost) |
+| q6-stacked-control | 12/6.0 + EasyCache | 564.0s | 0.5933 | 12.29 | clean, s12 look — SSIM byte-identical to R6's 681.2s control (fast host this run) |
+
+Within-run: Q4-stacked is 6.4% faster than the Q6 stacked control on the same host (527.9 vs 564.0s). Q4 base (1155.6s) is only slightly faster than the Q6_K ref (1233.5s ladder) but drifts more than Q5_K_M did (SSIM 0.6774 vs 0.7191) — Q4's drift is tonal/detail, not a pose break. Q4 buys a little speed at stacked config, no speed at baseline.
+
 - Lowest stable deep quant (eye-clean at baseline): TBD
 - Fastest acceptable stacked combo: TBD
 - Any third-party build beating our own quants: TBD
 
 ## OPEN / obstacles
 
-- None yet — implementation staged in `/tmp/deepquant/`, awaiting placement
-  (see PLACEMENT.md) after the execution-risk check on the dq worktree
-  is cleared.
+- Placement DONE 2026-11-28 ~05:25 Saigon: user explicitly confirmed proceeding despite the fresh execution-risk flag on fetched f92257f ("Cứ chạy đi, tôi chịu"); rebased dq-deepquant onto f92257f, placed staged files, committed 15294ed, pushed to main, D1 dispatched and done.
 - Host variance: only within-run deltas are trustworthy (identical base
   probe: 1233.5 s ladder vs 1565.9 s R1 vs 1477.5 s R6). Each of D1–D3
   carries its own Q6 stacked control for that reason; D4–D6 compare
