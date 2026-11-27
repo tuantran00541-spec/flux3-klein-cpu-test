@@ -1,0 +1,174 @@
+name: FLUX 3 Klein Bonsai round 3 fallback (vendor positive control + AMAX)
+
+# Run 2 (fallback) after run 1 proved group-128 ternary-from-base is noise
+# (MSE-g128 F16: pure static, SSIM 0.093 vs Q4, PSNR 13.79 dB):
+#  1. Positive control -- the VENDOR's trained ternary weights
+#     (TokForge TQ2G128 GGUF, type 35) through the same sd-cli path.
+#     If it renders a clean swordsman, the container + x86 kernel work
+#     and the gap is TRAINING, not the format. If it fails, the type-35
+#     kernel itself is broken on x86. Run at 16 steps (same as controls)
+#     and at 4 steps (the vendor's low-step recipe).
+#  2. AMAX-g128 F16 -- closes the ternary scale-rule loophole (the
+#     vendor's exact scale rule, from base). MSE is the better rule
+#     (mean MSE 0.00212 vs amax 0.00639); if AMAX is also noise,
+#     ternary-from-base is dead under both scale rules.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bonsai3-fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          date +%s > job-start.txt
+          df -h .; nproc; free -h; lscpu | head -5
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet safetensors numpy "huggingface_hub[cli]"
+          python -c "import torch; print('torch', torch.__version__)"
+
+      - name: Build stable-diffusion.cpp (CPU)
+        run: |
+          git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp
+          cmake -S sd.cpp -B sd.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF
+          cmake --build sd.cpp/build --config Release --target sd-cli -j4
+          ls -la sd.cpp/build/bin/
+          test -x sd.cpp/build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+          sd.cpp/build/bin/sd-cli --help > sd-cli-help.txt 2>&1 || true
+          grep -iE "cache-mode|llm_vision|offload|threads|seed" sd-cli-help.txt || true
+          du -sh sd.cpp; df -h .
+
+      - name: Download models (base + TE + VAE + TokForge + Q4 control)
+        run: |
+          mkdir -p models results
+          hf download ml-resources/flux-3-image-klein-comfy diffusion_models/flux3-image-klein-bf16.safetensors --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF Qwen3VL-4B-Instruct-Q4_K_M.gguf --local-dir models
+          hf download Qwen/Qwen3-VL-4B-Instruct-GGUF mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --local-dir models
+          hf download ml-resources/flux-3-image-klein-comfy vae/flux2-vae.safetensors --local-dir models
+          hf download darkmaniac7/TokForge-Bonsai-Image-4B-GGUF bonsai_klein_official_tq2g128.gguf --local-dir models
+          hf download webmp3/Sakura-FLUX.3-Image-Klein-Comfy-GGUF diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf --local-dir models || echo "Q4 download failed (comparison will be skipped)"
+          find models -type f | sort
+          du -sh models; df -h .
+
+      - name: Ternarize AMAX group-128 (from base BF16)
+        run: |
+          set +e
+          time timeout 1500 python bonsai3/ternarize.py --input models/diffusion_models/flux3-image-klein-bf16.safetensors --output models/flux3-image-klein-ternary-g128-amax.safetensors --scale-rule amax --group 128 --stats-out results/ternarize-g128-amax-stats.json
+          echo "ternarize-amax exit=$?"
+          ls -la models/; df -h .
+
+      - name: Convert AMAX to F16 GGUF (sd-cli; fusion only)
+        run: |
+          set +e
+          SDCLI=sd.cpp/build/bin/sd-cli
+          time timeout 900 $SDCLI -M convert --diffusion-model models/flux3-image-klein-ternary-g128-amax.safetensors --type f16 -o models/flux3-klein-ternary-g128-amax-f16.gguf
+          echo "convert amax->f16 exit=$?"
+          ls -la models/; df -h .
+
+      - name: Generate Q4_K_M control (same prompt/seed/steps/CFG)
+        if: always()
+        run: |
+          G=models/diffusion_models/Sakura-FLUX.3-Image-Klein-Q4_K_M-3.05GiB.gguf
+          if [ ! -f "$G" ]; then echo "Q4 file missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 1200 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/q4-512.png -v > results/sdcpp-q4.log 2>&1
+          echo "q4 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-q4.time
+          ls -la results/
+
+      - name: Generate TokForge vendor ternary, 16 steps (positive control)
+        if: always()
+        run: |
+          G=models/bonsai_klein_official_tq2g128.gguf
+          if [ ! -f "$G" ]; then echo "TokForge file missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 2400 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/tokforge-16-512.png -v > results/sdcpp-tokforge-16.log 2>&1
+          echo "tokforge-16 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-tokforge-16.time
+          ls -la results/
+
+      - name: Generate TokForge vendor ternary, 4 steps (vendor recipe)
+        if: always()
+        run: |
+          G=models/bonsai_klein_official_tq2g128.gguf
+          if [ ! -f "$G" ]; then echo "TokForge file missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 4200 ]; then echo "out of time (${ELAPSED}s), skipping"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 1200 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 4 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/tokforge-4-512.png -v > results/sdcpp-tokforge-4.log 2>&1
+          echo "tokforge-4 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-tokforge-4.time
+          ls -la results/
+
+      - name: Generate AMAX g128 F16 ternary (closes the scale-rule loophole)
+        if: always()
+        run: |
+          G=models/flux3-klein-ternary-g128-amax-f16.gguf
+          if [ ! -f "$G" ]; then echo "F16 AMAX missing, skipping"; exit 0; fi
+          ELAPSED=$(($(date +%s)-$(cat job-start.txt)))
+          if [ "$ELAPSED" -gt 3300 ]; then echo "out of time (${ELAPSED}s), skipping F16 (needs ~30 min)"; exit 0; fi
+          PROMPT="A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading."
+          CACHE=""
+          grep -q "cache-mode" sd-cli-help.txt && CACHE="--cache-mode easycache" || true
+          SEED=""
+          grep -q -- "--seed" sd-cli-help.txt && SEED="--seed 42" || true
+          START=$(date +%s)
+          set +e
+          timeout 3600 sd.cpp/build/bin/sd-cli --diffusion-model "$G" --llm models/Qwen3VL-4B-Instruct-Q4_K_M.gguf --llm_vision models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf --vae models/vae/flux2-vae.safetensors -p "$PROMPT" --cfg-scale 1.0 --steps 16 --sampling-method euler --width 512 --height 512 --threads 4 --offload-to-cpu $CACHE $SEED --output results/bonsai3-amax-f16-512.png -v > results/sdcpp-amax-f16.log 2>&1
+          echo "amax-f16 exit=$? wall=$(($(date +%s)-START))s" | tee results/sdcpp-amax-f16.time
+          ls -la results/
+
+      - name: Summarize results
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os, glob
+          res = {"images": {}, "times": {}, "stats_files": []}
+          for png in sorted(glob.glob("results/*.png")):
+              res["images"][os.path.basename(png)] = os.path.getsize(png)
+          for t in sorted(glob.glob("results/*.time")):
+              res["times"][os.path.basename(t)] = open(t).read().strip()
+          for s in sorted(glob.glob("results/*stats.json")):
+              res["stats_files"].append(os.path.basename(s))
+          with open("results/results.json", "w") as fp:
+              json.dump(res, fp, indent=2)
+          print(json.dumps(res, indent=2))
+          EOF
+          ls -la results/
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flux3-klein-bonsai3-fallback
+          path: results/
