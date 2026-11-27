@@ -1,0 +1,111 @@
+name: Qwen-Image-2.1 extra-speedup explore (OpenVINO + other lanes)
+
+# Dedicated workflow for the OV/other-lane exploration. Do NOT touch
+# qwen21-quant-ladder.yml (R1-R6 live there). One dispatch per path,
+# max 4 runs total for this exploration (viggle, cache, res384, openvino).
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: 'explore path: viggle | cache | res384 | openvino'
+        required: true
+        default: 'viggle'
+        type: choice
+        options: ['viggle', 'cache', 'res384', 'openvino']
+      steps:
+        description: 'fixed steps for sd.cpp paths (cache/res384)'
+        required: false
+        default: '20'
+      cfg:
+        description: 'fixed CFG for sd.cpp paths (cache/res384)'
+        required: false
+        default: '6.0'
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PIP_NO_CACHE_DIR: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Disk and CPU check
+        run: |
+          date +%s > job-start.txt
+          df -h .; nproc; free -h; lscpu | head -25
+
+      - name: Install Python deps (all paths)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --quiet "huggingface_hub[cli]" numpy Pillow safetensors ml_dtypes
+          python -c "import huggingface_hub, numpy, PIL, safetensors, ml_dtypes; print('deps OK')"
+
+      - name: Install OpenVINO stack (openvino path only)
+        if: inputs.path == 'openvino'
+        run: |
+          # Released stack first (GenAI table: export needs diffusers 0.41.0 /
+          # transformers 5.15.1). The driver retries on the nightly stack if
+          # the released one fails with the unsupported-pipeline error.
+          python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --quiet "optimum-intel==2.2.0" "openvino==2026.4" "openvino-genai==2026.4" "openvino-tokenizers==2026.4" "nncf==3.4" "diffusers==0.41.0" "transformers==5.15.1"
+          python -c "import torch, optimum.intel, openvino; print('torch', torch.__version__, '| openvino', openvino.__version__)"
+          df -h
+
+      - name: Build stable-diffusion.cpp (sd.cpp paths only)
+        if: inputs.path != 'openvino'
+        run: |
+          git clone --depth 1 --recursive https://github.com/leejet/stable-diffusion.cpp sd.cpp
+          cmake -S sd.cpp -B sd.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DSD_WEBP=OFF -DSD_WEBM=OFF
+          cmake --build sd.cpp/build --config Release --target sd-cli -j4
+          ls -la sd.cpp/build/bin/
+          test -x sd.cpp/build/bin/sd-cli || { echo SDCLI MISSING; exit 1; }
+          sd.cpp/build/bin/sd-cli --help > sd-cli-help.txt 2>&1 || true
+          sd.cpp/build/bin/sd-cli -M convert --help > sd-cli-convert-help.txt 2>&1 || true
+          du -sh sd.cpp; df -h .
+
+      - name: Fetch q8ref reference artifact
+        # Reference PNG (base-20.png, Q6_K) lives in the qwen21-ladder-q8ref
+        # artifact. Drop the GGUFs (re-downloaded/converted per path).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ART_ID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=qwen21-ladder-q8ref&per_page=5" --jq '.artifacts[0].id')
+          if [ -z "$ART_ID" ] || [ "$ART_ID" = "null" ]; then
+            echo "ERROR: no qwen21-ladder-q8ref artifact found"
+            exit 1
+          fi
+          echo "q8ref artifact id: $ART_ID"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ART_ID/zip" > ref.zip
+          mkdir -p ref && unzip -o ref.zip -d ref/
+          rm -f ref.zip ref/*.gguf
+          ls -la ref/
+          test -f ref/base-20.png || { echo "ERROR: ref/base-20.png missing"; ls -R ref; exit 1; }
+
+      - name: Syntax-check drivers
+        run: |
+          python -m py_compile qwen21-ov/run_explore.py qwen21-ov/ov_attempt.py qwen21-ladder/run_ladder.py && echo "compile OK"
+
+      - name: Run explore driver
+        run: |
+          mkdir -p results
+          cp sd-cli-help.txt sd-cli-convert-help.txt results/ 2>/dev/null || true
+          echo "path=${{ inputs.path }} steps=${{ inputs.steps }} cfg=${{ inputs.cfg }}"
+          set +e
+          time python qwen21-ov/run_explore.py --path "${{ inputs.path }}" --steps "${{ inputs.steps }}" --cfg "${{ inputs.cfg }}" --ref ref/base-20.png --out results
+          echo "driver exit=$?"
+          ls -la results/
+          df -h .
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen21-ov-${{ inputs.path }}
+          path: results/
+          if-no-files-found: warn
