@@ -62,7 +62,7 @@ Q3_K_M (secondary vendor — OPEN if budget remains).
 | D2 | own Q3 | own-q3-base, own-q3-stacked, q6-stacked-control | ✅ done — run 46082424954, success, 3/3 probes (see Results) |
 | D3 | own Q2 | own-q2-base, own-q2-stacked, q6-stacked-control | ✅ done — run 46090176956, success, 3/3 probes (see Results) |
 | D4 | unsloth base | unsloth-q4-base, unsloth-q4-stacked, unsloth-q3xl-base, unsloth-q3xl-stacked | ✅ done — run 46096029233, success, 4/4 probes (see Results) |
-| D5 | deep 2-bit | unsloth-q2-base, unsloth-q2-stacked, leejet-q2-base, leejet-q2-stacked | pending |
+| D5 | deep 2-bit | unsloth-q2-base, unsloth-q2-stacked, leejet-q2-base, leejet-q2-stacked | ✅ done — run 46102218971, success, 4/4 probes (see Results) |
 | D6 | Turbo deep + FP8 | turbo-q6-easycache, turbo-adq4-easycache, turbo-q2-easycache, turbo-q3xl-easycache, fp8-base, fp8-stacked | pending |
 
 Per-run time estimate: setup ~15–20 min (sd.cpp build + downloads; own
@@ -112,6 +112,17 @@ Within-run: Q2-stacked is 3.5% SLOWER than the Q6 control (615.7 vs 594.6s). Q2 
 | unsloth-q3xl-stacked | 12/6.0 + EasyCache | 580.6s | 0.5828 | 12.16 | clean, s12 look |
 
 HEADLINE: third-party quants beat our own at the same bit-width — Unsloth Q4 SSIM 0.8451 vs own Q4 0.6774; Unsloth Q3_XL 0.5785 vs own Q3 0.4911. (Likely Dynamic 2.0's better scale/importance handling vs sd-cli's plain convert.) Speed: no gain — unsloth-q4-base 1239.6s ≈ Q6 base; stacked 573.9s ≈ D1's Q6 control 564.0s cross-run. Quality win, not a speed win.
+
+### D5 — unsloth Q2 + leejet Q2 (run 46102218971, success, 4/4, elapsed 4005.6s; dispatched 03:18 UTC, completed ~04:36 UTC)
+
+| Probe | Steps/CFG | Wall | SSIM | PSNR | Eye verdict |
+|---|---|---|---|---|---|
+| unsloth-q2-base | 20/6.0 | 1354.8s | 0.5064 | 10.67 | clean, composition preserved, forward-facing pose drift |
+| unsloth-q2-stacked | 12/6.0 + EasyCache | 568.7s | 0.5019 | 10.31 | clean, s12 look |
+| leejet-q2-base | 20/6.0 | 1379.7s | 0.5368 | 10.63 | clean, composition preserved, forward-facing, katana slightly odd (blade looks doubled) |
+| leejet-q2-stacked | 12/6.0 + EasyCache | 621.1s | 0.5230 | 10.59 | clean, s12 look |
+
+Both third-party Q2s are coherent like own Q2 (SSIM ~0.51–0.54); leejet marginally better than unsloth on SSIM (0.5368 vs 0.5064 base). No speed gain — bases 1355–1380s vs Q6 1233.5s; stacked 569–621s ≈ Q6 control range. Q2 in any form is coherent but drifted and not faster.
 
 - Lowest stable deep quant (eye-clean at baseline): TBD
 - Fastest acceptable stacked combo: TBD

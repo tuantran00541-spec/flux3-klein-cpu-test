@@ -1,0 +1,132 @@
+{
+  "stage": "deepquant",
+  "group": "D5",
+  "seed": 42,
+  "prompt": "A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.",
+  "reference": "ref/base-20.png",
+  "base_checkpoint": "Qwen/Qwen-Image-2.1 transformer/ (merged, BF16->F16 cast; reference is a Q6_K GGUF - the 14.23 GB BF16/F16 cannot load on the 15 GiB runner)",
+  "text_encoder": "Qwen/Qwen3-VL-8B-Instruct-GGUF Qwen3VL-8B-Instruct-Q8_0.gguf",
+  "vae": "Comfy-Org/Qwen-Image-2.1 vae/qwen_image_2.1_vae_bf16.safetensors",
+  "license": "Qwen-Image-2.1 is under the Qwen Research License (research/evaluation only)",
+  "tests": [
+    {
+      "name": "unsloth-q2-base",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF",
+      "file": "qwen-image-2.1-Q2_K.gguf",
+      "level": "",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": false,
+      "extra_flags": [],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-Q2_K.gguf",
+      "gguf_bytes": 2466137824,
+      "status": "success",
+      "wall_seconds": 1354.8,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-unsloth-q2-base.png",
+          "bytes": 606714
+        }
+      ],
+      "ssim_vs_ref": 0.5064,
+      "psnr_vs_ref_db": 10.67,
+      "mean_abs_diff": 44.74
+    },
+    {
+      "name": "unsloth-q2-stacked",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF",
+      "file": "qwen-image-2.1-Q2_K.gguf",
+      "level": "",
+      "steps": 12,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-Q2_K.gguf",
+      "gguf_bytes": 2466137824,
+      "status": "success",
+      "wall_seconds": 568.7,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-unsloth-q2-stacked.png",
+          "bytes": 576658
+        }
+      ],
+      "ssim_vs_ref": 0.5019,
+      "psnr_vs_ref_db": 10.31,
+      "mean_abs_diff": 50.41
+    },
+    {
+      "name": "leejet-q2-base",
+      "source": "hf-gguf",
+      "repo": "leejet/Qwen-Image-2.1-GGUF",
+      "file": "qwen_image_2.1-Q2_K.gguf",
+      "level": "",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": false,
+      "extra_flags": [],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen_image_2.1-Q2_K.gguf",
+      "gguf_bytes": 2561716256,
+      "status": "success",
+      "wall_seconds": 1379.7,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-leejet-q2-base.png",
+          "bytes": 590267
+        }
+      ],
+      "ssim_vs_ref": 0.5368,
+      "psnr_vs_ref_db": 10.63,
+      "mean_abs_diff": 42.71
+    },
+    {
+      "name": "leejet-q2-stacked",
+      "source": "hf-gguf",
+      "repo": "leejet/Qwen-Image-2.1-GGUF",
+      "file": "qwen_image_2.1-Q2_K.gguf",
+      "level": "",
+      "steps": 12,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen_image_2.1-Q2_K.gguf",
+      "gguf_bytes": 2561716256,
+      "status": "success",
+      "wall_seconds": 621.1,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-leejet-q2-stacked.png",
+          "bytes": 563159
+        }
+      ],
+      "ssim_vs_ref": 0.523,
+      "psnr_vs_ref_db": 10.59,
+      "mean_abs_diff": 46.52
+    }
+  ],
+  "elapsed_seconds": 4005.6
+}

@@ -1,0 +1,81 @@
+[V] version: stable-diffusion.cpp version master-1147-3b0426f, commit 3b0426f --- main.cpp:602
+[V] System Info: 
+   SSE3 = 1 |    SSSE3 = 1 |    AVX = 1 |    AVX2 = 1 |    F16C = 1 |    FMA = 1 |    BMI2 = 1 |    AVX512 = 1 |    AVX512_VBMI = 1 |    AVX512_VNNI = 1 |    AVX512_BF16 = 1 |    OPENMP = 1 |    REPACK = 1 |  --- main.cpp:603
+[V] parse '/home/runner/work/flux3-klein-cpu-test/flux3-klein-cpu-test/models/qwen-image-2.1-Q2_K.gguf' using gguf format, prefix = '' --- model_loader.cpp:224
+[V] GGUF v3, tensor_count=265, metadata_kv_count=0 --- gguf_reader_ext.h:224
+[I] Detected model family: Qwen Image 2.1 (qwen-image-2.1-Q2_K.gguf) --- generation.cpp:126
+[V] parse '/home/runner/work/flux3-klein-cpu-test/flux3-klein-cpu-test/models/qwen-image-2.1-Q2_K.gguf' using gguf format, prefix = '' --- model_loader.cpp:224
+[V] GGUF v3, tensor_count=265, metadata_kv_count=0 --- gguf_reader_ext.h:224
+[V] Initializing backend: CPU --- ggml_extend_backend.cpp:432
+[V] qwen_image_2_1: layers = 32, hidden_size = 4096, context_dim = 4096 --- qwen_image_2_1.hpp:54
+[I] flash attention auto: CPU -> on (CPU) --- flash_attn.cpp:70
+[I] conv2d direct auto: CPU -> off (no implicit GEMM path) --- conv_direct.cpp:90
+[I] conv3d direct auto: CPU -> off (no implicit GEMM path) --- conv_direct.cpp:90
+[I] Diffusion model weights: 2351.88 MiB --- model_runtime.cpp:485
+[V] parse '/home/runner/work/flux3-klein-cpu-test/flux3-klein-cpu-test/models/Qwen3VL-8B-Instruct-Q8_0.gguf' using gguf format, prefix = '' --- model_loader.cpp:224
+[V] GGUF v3, tensor_count=399, metadata_kv_count=30 --- gguf_reader_ext.h:224
+[V] llm: num_layers = 36, vocab_size = 151936, hidden_size = 4096, intermediate_size = 12288 --- llm.hpp:460
+[W] no vision weights detected, vision disabled --- llm.hpp:466
+[I] Conditioner model weights: 7669.77 MiB --- model_runtime.cpp:485
+[V] parse '/home/runner/work/flux3-klein-cpu-test/flux3-klein-cpu-test/models/vae/qwen_image_2.1_vae_bf16.safetensors' using safetensors format, prefix = '' --- model_loader.cpp:230
+[I] using VAE for encoding / decoding --- component_builders.cpp:187
+[V] Wan VAE convolution type: 3D --- wan_vae.hpp:1328
+[I] VAE weights: 644.38 MiB --- model_runtime.cpp:485
+[V] auto-fit plan: 3 models, 4 phases --- run_plan.cpp:73
+[V]   load_dit: 2351.88 MiB params -> CPU --- run_plan.cpp:77
+[V]   load_text_encoder: 7669.77 MiB params -> CPU --- run_plan.cpp:77
+[V]   load_vae: 644.38 MiB params -> CPU --- run_plan.cpp:77
+[V]   phase encode_prompt: load_text_encoder --- run_plan.cpp:91
+[V]   phase encode_prompt: load_text_encoder --- run_plan.cpp:91
+[V]   phase sample: load_dit --- run_plan.cpp:91
+[V]   phase vae_decode: load_vae --- run_plan.cpp:91
+[V] split prompt "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n" to 14 tokens ["<|im_start|>", "system", "Ċ", "Com", "preh", "end", "Ġand", "Ġanalyze", "Ġthe", "Ġprovided", "Ġprompt", ".", "<|im_end|>", "Ċ", ] --- bpe_tokenizer.cpp:245
+[V] parse '<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n<|im_start|>user\nA detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.<|im_end|>\n<|im_start|>assistant\n' to [['<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n<|im_start|>user\n', 1], ['A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.', 1], ['<|im_end|>\n<|im_start|>assistant\n', 1], ] --- conditioner.hpp:2300
+[V] split prompt "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n<|im_start|>user\n" to 17 tokens ["<|im_start|>", "system", "Ċ", "Com", "preh", "end", "Ġand", "Ġanalyze", "Ġthe", "Ġprovided", "Ġprompt", ".", "<|im_end|>", "Ċ", "<|im_start|>", "user", "Ċ", ] --- bpe_tokenizer.cpp:245
+[V] split prompt "A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading." to 71 tokens ["A", "Ġdetailed", "Ġanime", "-style", "Ġillustration", "Ġof", "Ġa", "Ġyoung", "Ġswords", "man", "Ġstanding", "Ġon", "Ġa", "Ġmist", "y", "Ġmountain", "Ġpath", "Ġat", "Ġdawn", ",", "Ġlong", "Ġblack", "Ġhair", "Ġtied", "Ġback", ",", "Ġdark", "Ġblue", "Ġrobes", "Ġwith", "Ġsilver", "Ġtrim", ",", "Ġholding", "Ġa", "Ġshe", "athed", "Ġkat", "ana", "Ġat", "Ġhis", "Ġside", ",", "Ġpine", "Ġtrees", "Ġand", "Ġdrifting", "Ġfog", "Ġin", "Ġthe", "Ġbackground", ",", "Ġsoft", "Ġgolden", "Ġmorning", "Ġlight", "Ġbreaking", "Ġthrough", "Ġthe", "Ġmist", ",", "Ġcinematic", "Ġcomposition", ",", "Ġclean", "Ġlin", "ework", ",", "Ġdetailed", "Ġshading", ".", ] --- bpe_tokenizer.cpp:245
+[V] split prompt "<|im_end|>\n<|im_start|>assistant\n" to 5 tokens ["<|im_end|>", "Ċ", "<|im_start|>", "assistant", "Ċ", ] --- bpe_tokenizer.cpp:245
+[V] qwen3vl build cached graph cut plan done (taking 2 ms) --- ggml_graph_cut.cpp:1032
+[I] loading 397/399 tensors from /home/runner/work/flux3-klein-cpu-test/flux3-klein-cpu-test/models/Qwen3VL-8B-Instruct-Q8_0.gguf --- model_loader.cpp:1188
+  |#########                                         |  70/397 -   5.59GB/s[K  |##################                                | 138/397 -   5.56GB/s[K  |###########################                       | 208/397 -   5.78GB/s[K  |##################################                | 269/397 -   5.69GB/s[K  |############################################      | 342/397 -   5.85GB/s[K  |##################################################| 397/397 -   3.59GB/s[K
+[I] loading tensors completed, taking 2.09s (read: 1.40s, memcpy: 0.00s, convert: 0.00s, copy_to_backend: 0.00s) --- model_loader.cpp:1458
+[V] model manager prepared params backend buffers (7669.75 MB, 397 tensors, 1 blocks, RAM) on CPU --- model_manager.cpp:691
+[V] qwen3vl compute buffer size: 11.66 MB(RAM) on CPU (peak across 1 segment) --- execution_engine.cpp:758
+[I] computing condition graph completed, taking 14741 ms --- conditioner.hpp:3469
+[V] conditioning cache stored (1/4) --- conditioning_cache.h:129
+[V] free compute buffer: 11.66 MB(RAM) on CPU --- compute_workspace.cpp:314
+[V] split prompt "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n" to 14 tokens ["<|im_start|>", "system", "Ċ", "Com", "preh", "end", "Ġand", "Ġanalyze", "Ġthe", "Ġprovided", "Ġprompt", ".", "<|im_end|>", "Ċ", ] --- bpe_tokenizer.cpp:245
+[V] parse '<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n<|im_start|>user\n <|im_end|>\n<|im_start|>assistant\n' to [['<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n<|im_start|>user\n', 1], [' ', 1], ['<|im_end|>\n<|im_start|>assistant\n', 1], ] --- conditioner.hpp:2300
+[V] split prompt "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n<|im_start|>user\n" to 17 tokens ["<|im_start|>", "system", "Ċ", "Com", "preh", "end", "Ġand", "Ġanalyze", "Ġthe", "Ġprovided", "Ġprompt", ".", "<|im_end|>", "Ċ", "<|im_start|>", "user", "Ċ", ] --- bpe_tokenizer.cpp:245
+[V] split prompt " " to 1 tokens ["Ġ", ] --- bpe_tokenizer.cpp:245
+[V] split prompt "<|im_end|>\n<|im_start|>assistant\n" to 5 tokens ["<|im_end|>", "Ċ", "<|im_start|>", "assistant", "Ċ", ] --- bpe_tokenizer.cpp:245
+[V] qwen3vl build cached graph cut plan done (taking 2 ms) --- ggml_graph_cut.cpp:1032
+[V] qwen3vl compute buffer size: 2.88 MB(RAM) on CPU (peak across 1 segment) --- execution_engine.cpp:758
+[I] computing condition graph completed, taking 3134 ms --- conditioner.hpp:3469
+[V] conditioning cache stored (2/4) --- conditioning_cache.h:129
+[V] free compute buffer: 2.88 MB(RAM) on CPU --- compute_workspace.cpp:314
+[I] running in FLOW mode --- denoising_parameterization.cpp:67
+[I] get_sigmas with Flux scheduler --- denoiser.hpp:1199
+[V] Flux scheduler: image_seq_len=1024, steps=20, mu=0.539, shift_terminal=0.020 --- denoiser.hpp:776
+[I] sampling started: method=euler, steps=20 --- sampling.cpp:60
+[V] qwen_image_2_1 build cached graph cut plan done (taking 3 ms) --- ggml_graph_cut.cpp:1032
+[I] loading 265/265 tensors from /home/runner/work/flux3-klein-cpu-test/flux3-klein-cpu-test/models/qwen-image-2.1-Q2_K.gguf --- model_loader.cpp:1188
+  |#                                                 |   2/265 -   0.00MB/s[K  |###############################                   | 163/265 -   6.63GB/s[K  |##################################################| 265/265 -   4.89GB/s[K
+[I] loading tensors completed, taking 0.47s (read: 0.34s, memcpy: 0.00s, convert: 0.00s, copy_to_backend: 0.00s) --- model_loader.cpp:1458
+[V] model manager prepared params backend buffers (2351.88 MB, 265 tensors, 1 blocks, RAM) on CPU --- model_manager.cpp:691
+[V] qwen_image_2_1 compute buffer size: 247.88 MB(RAM) on CPU (peak across 1 segment) --- execution_engine.cpp:758
+[V] qwen_image_2_1 build cached graph cut plan done (taking 4 ms) --- ggml_graph_cut.cpp:1032
+  |==>                                               |  1/20 -  68.02s/it - ETA 21:32[K[V] qwen_image_2_1 build cached graph cut plan done (taking 3 ms) --- ggml_graph_cut.cpp:1032
+[V] qwen_image_2_1 build cached graph cut plan done (taking 2 ms) --- ggml_graph_cut.cpp:1032
+  |=====>                                            |  2/20 -  63.11s/it - ETA 19:40[K  |=======>                                          |  3/20 -  63.08s/it - ETA 18:20[K  |==========>                                       |  4/20 -  63.06s/it - ETA 17:09[K  |============>                                     |  5/20 -  63.03s/it - ETA 16:00[K  |===============>                                  |  6/20 -  63.39s/it - ETA 14:55[K  |=================>                                |  7/20 -  63.28s/it - ETA 13:50[K  |====================>                             |  8/20 -  62.98s/it - ETA 12:44[K  |======================>                           |  9/20 -  63.07s/it - ETA 11:40[K  |=========================>                        | 10/20 -  63.05s/it - ETA 10:36[K  |===========================>                      | 11/20 -  62.99s/it - ETA 09:31[K  |==============================>                   | 12/20 -  63.21s/it - ETA 08:28[K  |================================>                 | 13/20 -  63.03s/it - ETA 07:24[K  |===================================>              | 14/20 -  63.03s/it - ETA 06:20[K  |=====================================>            | 15/20 -  63.25s/it - ETA 05:17[K  |========================================>         | 16/20 -  63.40s/it - ETA 04:13[K  |==========================================>       | 17/20 -  63.03s/it - ETA 03:10[K  |=============================================>    | 18/20 -  63.01s/it - ETA 02:06[K  |===============================================>  | 19/20 -  63.18s/it - ETA 01:03[K  |==================================================| 20/20 -  63.22s/it[K
+[I] sampling completed, taking 1267.41s --- sampling.cpp:99
+[V] free compute buffer: 247.88 MB(RAM) on CPU --- compute_workspace.cpp:314
+[V] wan_vae build cached graph cut plan done (taking 1 ms) --- ggml_graph_cut.cpp:1032
+[I] loading 128/238 tensors from /home/runner/work/flux3-klein-cpu-test/flux3-klein-cpu-test/models/vae/qwen_image_2.1_vae_bf16.safetensors --- model_loader.cpp:1188
+  |#                                                 |   1/128 -   0.00MB/s[K  |##########                                        |  24/128 -  57.20MB/s[K  |###############                                   |  36/128 - 255.82MB/s[K  |##################                                |  44/128 - 322.32MB/s[K  |#####################                             |  53/128 - 298.74MB/s[K  |#########################                         |  62/128 - 307.34MB/s[K  |#####################################             |  93/128 - 385.27MB/s[K  |##################################################| 128/128 - 344.54MB/s[K
+[I] loading tensors completed, taking 1.40s (read: 0.87s, memcpy: 0.00s, convert: 0.35s, copy_to_backend: 0.00s) --- model_loader.cpp:1458
+[V] model manager prepared params backend buffers (482.81 MB, 128 tensors, 1 blocks, RAM) on CPU --- model_manager.cpp:691
+[V] wan_vae compute buffer size: 1944.25 MB(RAM) on CPU (peak across 1 segment) --- execution_engine.cpp:758
+[V] free compute buffer: 1944.25 MB(RAM) on CPU --- compute_workspace.cpp:314
+[I] computing vae decode graph completed, taking 68.16s --- vae.hpp:372
+[I] save result image 0 to 'results/deepq-unsloth-q2-base.png' (success) --- main.cpp:451
+[I] 1/1 images saved --- main.cpp:527
