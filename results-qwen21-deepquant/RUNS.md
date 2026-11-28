@@ -59,7 +59,7 @@ Q3_K_M (secondary vendor — OPEN if budget remains).
 | # | Group | Probes (in order) | Status |
 |---|---|---|---|
 | D1 | own Q4 | own-q4-base, own-q4-stacked, q6-stacked-control | ✅ done — run 46076596744, success, 3/3 probes (see Results) |
-| D2 | own Q3 | own-q3-base, own-q3-stacked, q6-stacked-control | pending |
+| D2 | own Q3 | own-q3-base, own-q3-stacked, q6-stacked-control | ✅ done — run 46082424954, success, 3/3 probes (see Results) |
 | D3 | own Q2 | own-q2-base, own-q2-stacked, q6-stacked-control | pending |
 | D4 | unsloth base | unsloth-q4-base, unsloth-q4-stacked, unsloth-q3xl-base, unsloth-q3xl-stacked | pending |
 | D5 | deep 2-bit | unsloth-q2-base, unsloth-q2-stacked, leejet-q2-base, leejet-q2-stacked | pending |
@@ -81,6 +81,16 @@ Driver enforces the 6000 s job budget and records skipped probes.
 | q6-stacked-control | 12/6.0 + EasyCache | 564.0s | 0.5933 | 12.29 | clean, s12 look — SSIM byte-identical to R6's 681.2s control (fast host this run) |
 
 Within-run: Q4-stacked is 6.4% faster than the Q6 stacked control on the same host (527.9 vs 564.0s). Q4 base (1155.6s) is only slightly faster than the Q6_K ref (1233.5s ladder) but drifts more than Q5_K_M did (SSIM 0.6774 vs 0.7191) — Q4's drift is tonal/detail, not a pose break. Q4 buys a little speed at stacked config, no speed at baseline.
+
+### D2 — own Q3 (run 46082424954, success, 3/3, elapsed 4197.0s; dispatched 23:25 UTC, completed ~00:51 UTC)
+
+| Probe | Steps/CFG | Wall | SSIM | PSNR | Eye verdict |
+|---|---|---|---|---|---|
+| own-q3-base | 20/6.0 | 1959.8s | 0.4911 | 9.84 | coherent, composition preserved, but pose shifted (faces more forward, katana angle odd); drift is structural, not just tonal |
+| own-q3-stacked | 12/6.0 + EasyCache | 876.1s | 0.5291 | 10.76 | clean, darker/muted s12 look, face in shadow |
+| q6-stacked-control | 12/6.0 + EasyCache | 880.8s | 0.5933 | 12.29 | clean, s12 look — SSIM byte-identical to R6/D1 controls (slow host this run) |
+
+Within-run: Q3-stacked is 0.5% faster than the Q6 control (876.1 vs 880.8s) — no speed gain. Q3 base is much SLOWER than Q6 base (1959.8s vs 1233.5s ladder) — dequant overhead outweighs memory savings at this size (same pattern as FLUX, where Q3_K was slower than Q4_K_M). Verdict: Q3 is a dead end for speed — slower at baseline, no gain stacked, and more pose drift than Q4.
 
 - Lowest stable deep quant (eye-clean at baseline): TBD
 - Fastest acceptable stacked combo: TBD

@@ -1,0 +1,104 @@
+{
+  "stage": "deepquant",
+  "group": "D2",
+  "seed": 42,
+  "prompt": "A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.",
+  "reference": "ref/base-20.png",
+  "base_checkpoint": "Qwen/Qwen-Image-2.1 transformer/ (merged, BF16->F16 cast; reference is a Q6_K GGUF - the 14.23 GB BF16/F16 cannot load on the 15 GiB runner)",
+  "text_encoder": "Qwen/Qwen3-VL-8B-Instruct-GGUF Qwen3VL-8B-Instruct-Q8_0.gguf",
+  "vae": "Comfy-Org/Qwen-Image-2.1 vae/qwen_image_2.1_vae_bf16.safetensors",
+  "license": "Qwen-Image-2.1 is under the Qwen Research License (research/evaluation only)",
+  "tests": [
+    {
+      "name": "own-q3-base",
+      "source": "own",
+      "repo": "",
+      "file": "",
+      "level": "q3_k",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": false,
+      "extra_flags": [],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "q3_K",
+      "gguf_bytes": 3110431904,
+      "status": "success",
+      "wall_seconds": 1959.8,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-own-q3-base.png",
+          "bytes": 609149
+        }
+      ],
+      "ssim_vs_ref": 0.4911,
+      "psnr_vs_ref_db": 9.84,
+      "mean_abs_diff": 50.6
+    },
+    {
+      "name": "own-q3-stacked",
+      "source": "own",
+      "repo": "",
+      "file": "",
+      "level": "q3_k",
+      "steps": 12,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "q3_K",
+      "gguf_bytes": 3110431904,
+      "status": "success",
+      "wall_seconds": 876.1,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-own-q3-stacked.png",
+          "bytes": 518544
+        }
+      ],
+      "ssim_vs_ref": 0.5291,
+      "psnr_vs_ref_db": 10.76,
+      "mean_abs_diff": 48.42
+    },
+    {
+      "name": "q6-stacked-control",
+      "source": "own",
+      "repo": "",
+      "file": "",
+      "level": "q6_k",
+      "steps": 12,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "q6_K",
+      "gguf_bytes": 5876563104,
+      "status": "success",
+      "wall_seconds": 880.8,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-q6-stacked-control.png",
+          "bytes": 524323
+        }
+      ],
+      "ssim_vs_ref": 0.5933,
+      "psnr_vs_ref_db": 12.29,
+      "mean_abs_diff": 37.92
+    }
+  ],
+  "elapsed_seconds": 4197.0
+}
