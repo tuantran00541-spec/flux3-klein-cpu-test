@@ -61,7 +61,7 @@ Q3_K_M (secondary vendor — OPEN if budget remains).
 | D1 | own Q4 | own-q4-base, own-q4-stacked, q6-stacked-control | ✅ done — run 46076596744, success, 3/3 probes (see Results) |
 | D2 | own Q3 | own-q3-base, own-q3-stacked, q6-stacked-control | ✅ done — run 46082424954, success, 3/3 probes (see Results) |
 | D3 | own Q2 | own-q2-base, own-q2-stacked, q6-stacked-control | ✅ done — run 46090176956, success, 3/3 probes (see Results) |
-| D4 | unsloth base | unsloth-q4-base, unsloth-q4-stacked, unsloth-q3xl-base, unsloth-q3xl-stacked | pending |
+| D4 | unsloth base | unsloth-q4-base, unsloth-q4-stacked, unsloth-q3xl-base, unsloth-q3xl-stacked | ✅ done — run 46096029233, success, 4/4 probes (see Results) |
 | D5 | deep 2-bit | unsloth-q2-base, unsloth-q2-stacked, leejet-q2-base, leejet-q2-stacked | pending |
 | D6 | Turbo deep + FP8 | turbo-q6-easycache, turbo-adq4-easycache, turbo-q2-easycache, turbo-q3xl-easycache, fp8-base, fp8-stacked | pending |
 
@@ -101,6 +101,17 @@ Within-run: Q3-stacked is 0.5% faster than the Q6 control (876.1 vs 880.8s) — 
 | q6-stacked-control | 12/6.0 + EasyCache | 594.6s | 0.5933 | 12.29 | clean, s12 look — SSIM byte-identical to R6/D1/D2 controls |
 
 Within-run: Q2-stacked is 3.5% SLOWER than the Q6 control (615.7 vs 594.6s). Q2 base (1371.1s) is slower than Q6 base (1233.5s) and Q4 base (1155.6s), faster only than Q3 base (1959.8s). Pattern across D1–D3: deep quants do NOT speed up Qwen on CPU — Q4 stacked +6%, Q3 flat, Q2 slower. Dequant cost dominates below Q6; only EasyCache + fewer steps move the needle.
+
+### D4 — unsloth Q4 + Q3_XL (run 46096029233, success, 4/4, elapsed 3769.6s; dispatched 02:01 UTC, completed ~03:17 UTC)
+
+| Probe | Steps/CFG | Wall | SSIM | PSNR | Eye verdict |
+|---|---|---|---|---|---|
+| unsloth-q4-base | 20/6.0 | 1239.6s | 0.8451 | 20.72 | **clean, closest to the reference of all deep quants** — same pose/composition as ref (three-quarter back view, sun upper right); Unsloth Dynamic 2.0 Q4 is far better than sd-cli's own Q4 convert |
+| unsloth-q4-stacked | 12/6.0 + EasyCache | 573.9s | 0.5642 | 12.09 | clean, s12 look |
+| unsloth-q3xl-base | 20/6.0 | 1283.5s | 0.5785 | 11.93 | clean, close to reference pose, better than own Q3 (0.4911) |
+| unsloth-q3xl-stacked | 12/6.0 + EasyCache | 580.6s | 0.5828 | 12.16 | clean, s12 look |
+
+HEADLINE: third-party quants beat our own at the same bit-width — Unsloth Q4 SSIM 0.8451 vs own Q4 0.6774; Unsloth Q3_XL 0.5785 vs own Q3 0.4911. (Likely Dynamic 2.0's better scale/importance handling vs sd-cli's plain convert.) Speed: no gain — unsloth-q4-base 1239.6s ≈ Q6 base; stacked 573.9s ≈ D1's Q6 control 564.0s cross-run. Quality win, not a speed win.
 
 - Lowest stable deep quant (eye-clean at baseline): TBD
 - Fastest acceptable stacked combo: TBD

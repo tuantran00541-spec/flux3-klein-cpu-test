@@ -1,0 +1,132 @@
+{
+  "stage": "deepquant",
+  "group": "D4",
+  "seed": 42,
+  "prompt": "A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.",
+  "reference": "ref/base-20.png",
+  "base_checkpoint": "Qwen/Qwen-Image-2.1 transformer/ (merged, BF16->F16 cast; reference is a Q6_K GGUF - the 14.23 GB BF16/F16 cannot load on the 15 GiB runner)",
+  "text_encoder": "Qwen/Qwen3-VL-8B-Instruct-GGUF Qwen3VL-8B-Instruct-Q8_0.gguf",
+  "vae": "Comfy-Org/Qwen-Image-2.1 vae/qwen_image_2.1_vae_bf16.safetensors",
+  "license": "Qwen-Image-2.1 is under the Qwen Research License (research/evaluation only)",
+  "tests": [
+    {
+      "name": "unsloth-q4-base",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF",
+      "file": "qwen-image-2.1-Q4_K_M.gguf",
+      "level": "",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": false,
+      "extra_flags": [],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-Q4_K_M.gguf",
+      "gguf_bytes": 4199565024,
+      "status": "success",
+      "wall_seconds": 1239.6,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-unsloth-q4-base.png",
+          "bytes": 614620
+        }
+      ],
+      "ssim_vs_ref": 0.8451,
+      "psnr_vs_ref_db": 20.72,
+      "mean_abs_diff": 10.43
+    },
+    {
+      "name": "unsloth-q4-stacked",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF",
+      "file": "qwen-image-2.1-Q4_K_M.gguf",
+      "level": "",
+      "steps": 12,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-Q4_K_M.gguf",
+      "gguf_bytes": 4199565024,
+      "status": "success",
+      "wall_seconds": 573.9,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-unsloth-q4-stacked.png",
+          "bytes": 528472
+        }
+      ],
+      "ssim_vs_ref": 0.5642,
+      "psnr_vs_ref_db": 12.09,
+      "mean_abs_diff": 40.62
+    },
+    {
+      "name": "unsloth-q3xl-base",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF",
+      "file": "qwen-image-2.1-Q3_K_XL.gguf",
+      "level": "",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": false,
+      "extra_flags": [],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-Q3_K_XL.gguf",
+      "gguf_bytes": 3612493536,
+      "status": "success",
+      "wall_seconds": 1283.5,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-unsloth-q3xl-base.png",
+          "bytes": 619334
+        }
+      ],
+      "ssim_vs_ref": 0.5785,
+      "psnr_vs_ref_db": 11.93,
+      "mean_abs_diff": 35.27
+    },
+    {
+      "name": "unsloth-q3xl-stacked",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF",
+      "file": "qwen-image-2.1-Q3_K_XL.gguf",
+      "level": "",
+      "steps": 12,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-Q3_K_XL.gguf",
+      "gguf_bytes": 3612493536,
+      "status": "success",
+      "wall_seconds": 580.6,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-unsloth-q3xl-stacked.png",
+          "bytes": 530864
+        }
+      ],
+      "ssim_vs_ref": 0.5828,
+      "psnr_vs_ref_db": 12.16,
+      "mean_abs_diff": 38.57
+    }
+  ],
+  "elapsed_seconds": 3769.6
+}
