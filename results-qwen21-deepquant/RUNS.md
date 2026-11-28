@@ -60,7 +60,7 @@ Q3_K_M (secondary vendor — OPEN if budget remains).
 |---|---|---|---|
 | D1 | own Q4 | own-q4-base, own-q4-stacked, q6-stacked-control | ✅ done — run 46076596744, success, 3/3 probes (see Results) |
 | D2 | own Q3 | own-q3-base, own-q3-stacked, q6-stacked-control | ✅ done — run 46082424954, success, 3/3 probes (see Results) |
-| D3 | own Q2 | own-q2-base, own-q2-stacked, q6-stacked-control | pending |
+| D3 | own Q2 | own-q2-base, own-q2-stacked, q6-stacked-control | ✅ done — run 46090176956, success, 3/3 probes (see Results) |
 | D4 | unsloth base | unsloth-q4-base, unsloth-q4-stacked, unsloth-q3xl-base, unsloth-q3xl-stacked | pending |
 | D5 | deep 2-bit | unsloth-q2-base, unsloth-q2-stacked, leejet-q2-base, leejet-q2-stacked | pending |
 | D6 | Turbo deep + FP8 | turbo-q6-easycache, turbo-adq4-easycache, turbo-q2-easycache, turbo-q3xl-easycache, fp8-base, fp8-stacked | pending |
@@ -91,6 +91,16 @@ Within-run: Q4-stacked is 6.4% faster than the Q6 stacked control on the same ho
 | q6-stacked-control | 12/6.0 + EasyCache | 880.8s | 0.5933 | 12.29 | clean, s12 look — SSIM byte-identical to R6/D1 controls (slow host this run) |
 
 Within-run: Q3-stacked is 0.5% faster than the Q6 control (876.1 vs 880.8s) — no speed gain. Q3 base is much SLOWER than Q6 base (1959.8s vs 1233.5s ladder) — dequant overhead outweighs memory savings at this size (same pattern as FLUX, where Q3_K was slower than Q4_K_M). Verdict: Q3 is a dead end for speed — slower at baseline, no gain stacked, and more pose drift than Q4.
+
+### D3 — own Q2 (run 46090176956, success, 3/3, elapsed 3447.6s; dispatched 00:52 UTC, completed ~02:01 UTC)
+
+| Probe | Steps/CFG | Wall | SSIM | PSNR | Eye verdict |
+|---|---|---|---|---|---|
+| own-q2-base | 20/6.0 | 1371.1s | 0.5236 | 10.28 | coherent (NOT blank, unlike FLUX Q2), composition preserved, pose drifted (forward-facing, katana angle odd) |
+| own-q2-stacked | 12/6.0 + EasyCache | 615.7s | 0.5192 | 10.00 | clean, darker/muted s12 look, same pose drift as base |
+| q6-stacked-control | 12/6.0 + EasyCache | 594.6s | 0.5933 | 12.29 | clean, s12 look — SSIM byte-identical to R6/D1/D2 controls |
+
+Within-run: Q2-stacked is 3.5% SLOWER than the Q6 control (615.7 vs 594.6s). Q2 base (1371.1s) is slower than Q6 base (1233.5s) and Q4 base (1155.6s), faster only than Q3 base (1959.8s). Pattern across D1–D3: deep quants do NOT speed up Qwen on CPU — Q4 stacked +6%, Q3 flat, Q2 slower. Dequant cost dominates below Q6; only EasyCache + fewer steps move the needle.
 
 - Lowest stable deep quant (eye-clean at baseline): TBD
 - Fastest acceptable stacked combo: TBD
