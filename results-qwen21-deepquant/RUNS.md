@@ -63,7 +63,7 @@ Q3_K_M (secondary vendor — OPEN if budget remains).
 | D3 | own Q2 | own-q2-base, own-q2-stacked, q6-stacked-control | ✅ done — run 46090176956, success, 3/3 probes (see Results) |
 | D4 | unsloth base | unsloth-q4-base, unsloth-q4-stacked, unsloth-q3xl-base, unsloth-q3xl-stacked | ✅ done — run 46096029233, success, 4/4 probes (see Results) |
 | D5 | deep 2-bit | unsloth-q2-base, unsloth-q2-stacked, leejet-q2-base, leejet-q2-stacked | ✅ done — run 46102218971, success, 4/4 probes (see Results) |
-| D6 | Turbo deep + FP8 | turbo-q6-easycache, turbo-adq4-easycache, turbo-q2-easycache, turbo-q3xl-easycache, fp8-base, fp8-stacked | pending |
+| D6 | Turbo deep + FP8 | turbo-q6-easycache, turbo-adq4-easycache, turbo-q2-easycache, turbo-q3xl-easycache, fp8-base, fp8-stacked | ✅ done — run 46108348394, success, 4/6 probes success + 2 FP8 failed (see Results) |
 
 Per-run time estimate: setup ~15–20 min (sd.cpp build + downloads; own
 runs also merge 14 GB shards) + 3–4 gens. Own Q4/Q3/Q2 gens ~1200–1500 s
@@ -123,6 +123,28 @@ HEADLINE: third-party quants beat our own at the same bit-width — Unsloth Q4 S
 | leejet-q2-stacked | 12/6.0 + EasyCache | 621.1s | 0.5230 | 10.59 | clean, s12 look |
 
 Both third-party Q2s are coherent like own Q2 (SSIM ~0.51–0.54); leejet marginally better than unsloth on SSIM (0.5368 vs 0.5064 base). No speed gain — bases 1355–1380s vs Q6 1233.5s; stacked 569–621s ≈ Q6 control range. Q2 in any form is coherent but drifted and not faster.
+
+### D6 — Turbo deep + FP8 (run 46108348394, success, 4/6 probes success + 2 FP8 failed, elapsed 1557.7s; dispatched 04:36 UTC, completed ~05:12 UTC)
+
+| Probe | Steps/CFG | Wall | SSIM | PSNR | Eye verdict |
+|---|---|---|---|---|---|
+| turbo-q6-easycache | 8/1.0 + EasyCache | 473.1s | 0.4356 | 9.63 | clean bust close-up portrait (Turbo reframe, same as R5's 367.6s — slower host here) |
+| turbo-adq4-easycache | 8/1.0 + EasyCache | 282.2s | 0.4488 | 9.82 | **clean, best-looking Turbo — detailed face, fastest Turbo probe**; reframed to bust close-up |
+| turbo-q2-easycache | 8/1.0 + EasyCache | 301.8s | 0.5124 | 11.55 | clean, reframed to close-up, face softer than AD-Q4; highest Turbo SSIM |
+| turbo-q3xl-easycache | 8/1.0 + EasyCache | 319.3s | 0.5044 | 10.56 | clean, reframed to close-up |
+| fp8-base | 20/6.0 | 0.1s | — | — | **FAILED — sd-cli exit 1**: Unsloth FP8 safetensors uses diffusers-style tensor names (`model.diffusion_model.transformer_blocks.*`); sd.cpp metadata validation rejects them ("not in model metadata"). Direct load impossible — needs conversion to sd.cpp's expected safetensors layout first |
+| fp8-stacked | 12/6.0 + EasyCache | 0.0s | — | — | **FAILED — same sd-cli exit 1**, same cause |
+
+Turbo deep quants are the fastest probes in the whole sweep (282–473s), but all reframe to a bust/upper-body close-up — separate lane, deliberate accept only. AD-Q4_K is the best Turbo deep quant (fastest + best-looking). FP8 direct load is dead as attempted; a convert-first run would be needed to test FP8 at all.
+
+## Final verdicts
+
+- **Lowest stable deep quant (eye-clean at baseline): Unsloth Q4_K_M (SSIM 0.8451)** — the only deep quant that stays close to the Q6 reference at 20 steps. Own Q4 (0.6774) is eye-clean but drifted; Q3/Q2 (own and third-party, 0.49–0.58) are coherent but pose-drifted.
+- **Fastest acceptable stacked combo (same full-body composition): Q6_K + EasyCache + 12 steps, 681.2s within-run (R6)** — no deep quant beats it. Own Q4 stacked 527.9s is faster but drifts (SSIM 0.5709); Unsloth Q4 stacked 573.9s is close to the Q6 control and drifts less (0.5642 — but that is the s12 tonal cost, same as control).
+- **Fastest overall (different framing): Turbo AD-Q4_K + EasyCache, 282.2s** — bust close-up, detailed face. Turbo Q2 (301.8s) and Q3_XL (319.3s) are close behind.
+- **Third-party vs own:** third-party wins on quality at the same bit-width — Unsloth Q4 0.8451 vs own Q4 0.6774; Unsloth Q3_XL 0.5785 vs own Q3 0.4911; leejet Q2 0.5368 vs own Q2 0.5236 (marginal). No third-party build wins on speed.
+- **Deep quants do NOT speed up Qwen on CPU.** Baseline: Q4 1155–1240s ≈ Q6 1233s; Q3 1284–1960s; Q2 1355–1380s — all flat or slower. Stacked: deep quants land in the same 528–621s band as the Q6 control (564–881s cross-host). Only EasyCache + fewer steps + Turbo distillation move the time; quantization only shrinks disk/RAM.
+- **FP8:** direct safetensors load FAILED (metadata validation) — untested, needs a convert-first attempt.
 
 - Lowest stable deep quant (eye-clean at baseline): TBD
 - Fastest acceptable stacked combo: TBD

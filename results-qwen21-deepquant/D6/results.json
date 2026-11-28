@@ -1,0 +1,181 @@
+{
+  "stage": "deepquant",
+  "group": "D6",
+  "seed": 42,
+  "prompt": "A detailed anime-style illustration of a young swordsman standing on a misty mountain path at dawn, long black hair tied back, dark blue robes with silver trim, holding a sheathed katana at his side, pine trees and drifting fog in the background, soft golden morning light breaking through the mist, cinematic composition, clean linework, detailed shading.",
+  "reference": "ref/base-20.png",
+  "base_checkpoint": "Qwen/Qwen-Image-2.1 transformer/ (merged, BF16->F16 cast; reference is a Q6_K GGUF - the 14.23 GB BF16/F16 cannot load on the 15 GiB runner)",
+  "text_encoder": "Qwen/Qwen3-VL-8B-Instruct-GGUF Qwen3VL-8B-Instruct-Q8_0.gguf",
+  "vae": "Comfy-Org/Qwen-Image-2.1 vae/qwen_image_2.1_vae_bf16.safetensors",
+  "license": "Qwen-Image-2.1 is under the Qwen Research License (research/evaluation only)",
+  "tests": [
+    {
+      "name": "turbo-q6-easycache",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-Turbo-GGUF",
+      "file": "qwen-image-2.1-turbo-Q6_K.gguf",
+      "level": "",
+      "steps": 8,
+      "cfg": 1.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "qwen-image-2.1-turbo",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-turbo-Q6_K.gguf",
+      "gguf_bytes": 6271551296,
+      "status": "success",
+      "wall_seconds": 473.1,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-turbo-q6-easycache.png",
+          "bytes": 642121
+        }
+      ],
+      "ssim_vs_ref": 0.4356,
+      "psnr_vs_ref_db": 9.63,
+      "mean_abs_diff": 57.64
+    },
+    {
+      "name": "turbo-adq4-easycache",
+      "source": "hf-gguf",
+      "repo": "AtomicChat/Qwen-Image-2.1-Turbo-GGUF",
+      "file": "Qwen-Image-2.1-Turbo-AD-Q4_K.gguf",
+      "level": "",
+      "steps": 8,
+      "cfg": 1.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "qwen-image-2.1-turbo",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "Qwen-Image-2.1-Turbo-AD-Q4_K.gguf",
+      "gguf_bytes": 4201694944,
+      "status": "success",
+      "wall_seconds": 282.2,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-turbo-adq4-easycache.png",
+          "bytes": 636439
+        }
+      ],
+      "ssim_vs_ref": 0.4488,
+      "psnr_vs_ref_db": 9.82,
+      "mean_abs_diff": 58.19
+    },
+    {
+      "name": "turbo-q2-easycache",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-Turbo-GGUF",
+      "file": "qwen-image-2.1-turbo-Q2_K.gguf",
+      "level": "",
+      "steps": 8,
+      "cfg": 1.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "qwen-image-2.1-turbo",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-turbo-Q2_K.gguf",
+      "gguf_bytes": 2466137920,
+      "status": "success",
+      "wall_seconds": 301.8,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-turbo-q2-easycache.png",
+          "bytes": 629891
+        }
+      ],
+      "ssim_vs_ref": 0.5124,
+      "psnr_vs_ref_db": 11.55,
+      "mean_abs_diff": 48.55
+    },
+    {
+      "name": "turbo-q3xl-easycache",
+      "source": "hf-gguf",
+      "repo": "unsloth/Qwen-Image-2.1-Turbo-GGUF",
+      "file": "qwen-image-2.1-turbo-Q3_K_XL.gguf",
+      "level": "",
+      "steps": 8,
+      "cfg": 1.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "qwen-image-2.1-turbo",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "qwen-image-2.1-turbo-Q3_K_XL.gguf",
+      "gguf_bytes": 3612493632,
+      "status": "success",
+      "wall_seconds": 319.3,
+      "error": null,
+      "outputs": [
+        {
+          "file": "deepq-turbo-q3xl-easycache.png",
+          "bytes": 656279
+        }
+      ],
+      "ssim_vs_ref": 0.5044,
+      "psnr_vs_ref_db": 10.56,
+      "mean_abs_diff": 49.2
+    },
+    {
+      "name": "fp8-base",
+      "source": "hf-safetensors",
+      "repo": "unsloth/Qwen-Image-2.1-FP8",
+      "file": "Qwen-Image-2.1-FP8.safetensors",
+      "level": "",
+      "steps": 20,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": false,
+      "extra_flags": [],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "Qwen-Image-2.1-FP8.safetensors",
+      "gguf_bytes": 7122877560,
+      "status": "failed",
+      "wall_seconds": 0.1,
+      "error": "sd-cli exit 1 (see results/sdcpp-deepq-fp8-base.log)",
+      "outputs": []
+    },
+    {
+      "name": "fp8-stacked",
+      "source": "hf-safetensors",
+      "repo": "unsloth/Qwen-Image-2.1-FP8",
+      "file": "Qwen-Image-2.1-FP8.safetensors",
+      "level": "",
+      "steps": 12,
+      "cfg": 6.0,
+      "threads": 4,
+      "easycache": true,
+      "extra_flags": [
+        "--cache-mode",
+        "easycache"
+      ],
+      "sigmas": "",
+      "dit_repo": "Qwen/Qwen-Image-2.1",
+      "quant_type_used": "Qwen-Image-2.1-FP8.safetensors",
+      "gguf_bytes": 7122877560,
+      "status": "failed",
+      "wall_seconds": 0.0,
+      "error": "sd-cli exit 1 (see results/sdcpp-deepq-fp8-stacked.log)",
+      "outputs": []
+    }
+  ],
+  "elapsed_seconds": 1557.7
+}
